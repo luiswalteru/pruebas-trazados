@@ -2,83 +2,89 @@
 
 ## Estado actual del proyecto
 
-El proyecto compila correctamente (`npx vite build` exitoso). Las tres modalidades de generacion (font, SVG, manual) estan implementadas. El algoritmo de esqueletonizacion fue reescrito como v2 con rasterizacion 2×, suavizado, merge de segmentos y filtrado de ruido. Los valores (canvas size, dotSize, strokeWidth, dotCount) se computan dinamicamente por letra en modo font.
+Tras el **refactor manual-only (abril 2026)** el proyecto se simplifico considerablemente:
+- Se eliminaron los modos `font` y `svg` de la UI. El unico flujo activo es dibujo manual.
+- Se añadio auto-centrado del cursor al eje medial de la letra (`letterMask.js` + `snapToCenterline` en `ManualPathDrawer`).
+- `letter-dotted.svg` pasa a emitirse como `<g id="pathN">` con `<circle>`s por coordenada (antes eran paths con `stroke-dasharray`).
+- `thum.png` se genera automaticamente al exportar (rasteriza fill + dots).
+- Se dejaron de exportar `character.png`, `fondo.png`, `audio/es/title.mp3` y `audio/val/title.mp3` (ni siquiera como placeholders).
+- `src/utils/pathSampler.js` y varias funciones de `fontParser.js` quedaron **sin usar** pero se conservan en el repo.
 
 ---
 
 ## Tareas pendientes
 
-### 1. Testing en navegador
+### 1. Resolver campos huerfanos en `data.json`
 **Prioridad: Alta**
 
-La extension Chrome no estuvo disponible durante el desarrollo. Todo fue verificado via build exitoso y revision de codigo. Necesita testing manual:
+`generateDataJson` sigue escribiendo:
+- `character: "character.png"`
+- `title.audio.es: "audio/es/title"`, `title.audio.val: "audio/val/title"`
 
-- [ ] **Modo font completo**: Cargar fuente -> seleccionar letras -> generar -> verificar valores dinamicos por letra -> preview -> exportar
-- [ ] **Valores dinamicos**: Verificar que canvas size, dotSize, strokeWidth y dotCount varian correctamente por letra
-- [ ] **Override de valores**: Verificar que ingresar un valor > 0 fuerza ese valor en lugar del auto-computado
-- [ ] **Path smoothness**: Verificar que los trazos generados son suaves (sin saltos) en el PreviewPage tras pathSampler v2
-- [ ] **Modo manual end-to-end**: Dibujar trazos -> generar -> preview -> exportar
-- [ ] **Atajos de teclado modo manual** (N, Ctrl+Z, Enter, Escape)
-- [ ] **Modo SVG**: Importar SVGs -> generar -> preview -> exportar
-- [ ] **Combos (ch, ll)**: Verificar que el offset horizontal y anchos individuales se calculan bien
+Pero esos archivos **ya no se incluyen en el ZIP**. Opciones:
+- [ ] Dejar de emitir esos campos cuando no hay los assets (romperia cualquier consumidor que los espere no-null)
+- [ ] Reintroducir uploads opcionales de imagen/audio en el paso 4 + placeholders
+- [ ] Confirmar que el componente consumidor los puede manejar como missing/placeholder
 
-### 2. Refinamiento del algoritmo para letras problematicas
+### 2. Desajuste en el campo `letter` para ñ
 **Prioridad: Media**
 
-El algoritmo v2 mejoro significativamente la calidad, pero puede haber casos edge:
-- Letras con serifas pueden generar ramas espurias residuales
-- Letras muy gruesas o muy finas pueden no esqueletonizar bien
-- El ordenamiento de trazos "top->bottom, left->right" puede no ser correcto para todas las letras cursivas (ej: la "e" cursiva podria necesitar un orden especifico)
+- `getFolderName` mapea `ñ` → `ny` (carpeta = `trazado-letra-ny` / `trazado-letra-ny-mayus`)
+- `generateDataJson` escribe el campo `letter` como `"ñ"` / `"UpperÑ"` (sin mapeo)
 
-**Posibles mejoras**:
-- Permitir al usuario reordenar trazos manualmente en la UI
-- Modo hibrido: auto-generar con esqueleto pero permitir ajustes manuales
-- Ajustar MIN_SEGMENT_RATIO (actualmente 8%) si se encuentran letras con ruido residual
+Si el componente consumidor espera `"ny"` / `"UpperNy"` en el campo `letter`, hay que ajustar uno de los dos lados.
 
-### 3. Validacion de datos generados
-**Prioridad: Media**
+### 3. Testing manual en navegador
+**Prioridad: Alta**
 
-- [ ] Validar que data.json cumple el schema esperado por el componente React de la app educativa
-- [ ] Verificar que los selectores `#path1`, `#path2` en letterAnimationPath coinciden con los IDs reales en letter-dotted.svg
-- [ ] Verificar que los coords en dotList estan dentro del rango [0, width] y [0, height]
+- [ ] Dibujar trazados end-to-end sin fuente de referencia
+- [ ] Idem con fuente de referencia (verificar auto-centrado via `snapToCenterline`)
+- [ ] Preview reproduce correctamente los trazados generados
+- [ ] Atajos de teclado en `ManualPathDrawer` (N, Ctrl+Z, Enter, Esc)
+- [ ] Export individual + masivo (verificar que los ZIPs incluyen solo los 4 archivos correctos + `thum.png`)
+- [ ] Override de `dotSize` / `animationPathStroke` (0 vs >0)
+- [ ] Combos (`ch`, `ll`) se manejan bien incluso sin fuente de referencia (el fallback `generateFillSvgFromStrokes` dibuja algo razonable?)
 
-### 4. Mejoras de UX
+### 4. Decisiones sobre codigo muerto
 **Prioridad: Baja**
 
-- [ ] Mostrar preview en miniatura de los SVGs generados en el paso 4
-- [ ] Permitir editar/ajustar trazos generados automaticamente antes de exportar
+- [ ] Eliminar `src/utils/pathSampler.js` si no se planea reintroducir el modo font
+- [ ] Eliminar `computeGlyphCanvasSize` y `getAvailableChars` de `fontParser.js` si se confirma que no se usan
+- [ ] Eliminar `computeDotCount` de `dataGenerator.js` si se confirma que no se usa en la UI actual
+
+### 5. Ajustes del contrato con el componente consumidor
+**Prioridad: Media**
+
+El cambio de formato de `letter-dotted.svg` (de paths dasheados a `<circle>`s por coordenada) requiere confirmar que:
+- [ ] El componente educativo (`lecto_pruebas_2026`) acepta este nuevo formato
+- [ ] O, si no, `generateDottedSvg` puede emitir el formato antiguo reconstruyendo paths desde `strokePaths`
+
+### 6. Mejoras de UX (baja)
 - [ ] Indicador de progreso durante generacion masiva
-- [ ] Drag & drop para subir archivos de fuente y SVGs
-- [ ] Permitir reordenar trazos manualmente
+- [ ] Preview en miniatura de los SVGs en el paso 4
+- [ ] Permitir reordenar trazos manualmente (hoy el orden viene dado por el orden de dibujo)
 
 ---
 
 ## Problemas resueltos
 
-### Resuelto: Modo manual no visible en Step 3
-**Causa**: CSS `.mode-selector` tenia `grid-template-columns: 1fr 1fr` (2 columnas) en lugar de 3.
-**Solucion**: Cambiado a `1fr 1fr 1fr` en App.css.
+### Resuelto: App sobrecomplicada con 3 modos
+**Solucion**: Refactor a manual-only. Paso 1 ahora es solo intro + carga opcional de fuente de referencia. Se eliminaron todos los handlers de SVG upload e import, y la dependencia de `pathSampler.js`.
 
-### Resuelto: Trazados imprecisos — saltos entre puntos en preview
-**Causa**: Rasterizacion a 1× resolucion producia esqueletos con zigzag pixel a pixel. Sin suavizado previo al resampleo.
-**Solucion**: pathSampler.js v2 con RASTER_SCALE=2, smoothing 4 iteraciones antes de resampleo, merge de segmentos colineales (angulo < 30°), filtrado de ruido (< 8% del mas largo), Bezier cuadraticas para SVG paths.
+### Resuelto: Trazados temblorosos / descentrados al dibujar
+**Solucion**: Pipeline de captura en `ManualPathDrawer` con:
+1. EMA sobre el cursor (`SMOOTH_ALPHA = 0.5`)
+2. Gate de distancia minima (1.2 px)
+3. `snapToCenterline` usando el gradiente del campo de distancia de la mascara del fill (distance transform chamfer 3-4 en `letterMask.js`). La correccion es radial hacia el esqueleto y se atenua a 0 cuando el punto ya esta centrado.
 
-### Resuelto: Valores fijos para todas las letras
-**Causa**: Se usaban los mismos valores (380×340, dotSize 33, etc.) para todas las letras.
-**Solucion**: Implementado calculo dinamico por letra: `computeGlyphCanvasSize`, `computeLetterParams`, `computeDotCount`. Patron 0 = auto, >0 = override del usuario.
+### Resuelto: Placeholders MP3/PNG no significativos
+**Solucion**: Se dejo de empaquetar assets que el generador no puede producir. `thum.png` si se genera auto-rasterizando fill + dots en `thumGenerator.js`.
 
 ### Resuelto: Inputs de configuracion deshabilitados en modo font
-**Causa**: Panel de config tenia `opacity: 0.5, pointerEvents: 'none'` en modo font.
-**Solucion**: Removido. Todos los inputs siempre habilitados. El usuario puede forzar valores ingresando > 0.
+**Solucion**: Modo font eliminado. Todos los inputs siempre habilitados.
 
 ### Resuelto: Navegacion Preview -> Generador reiniciaba estado
 **Solucion**: Persistencia en `window.__generatorState` + URL param `?step=N`.
-
-### Resuelto: Trazado en el borde en lugar del interior
-**Solucion**: Implementado Zhang-Suen thinning para extraer linea central.
-
-### Resuelto: Direccion de trazado incorrecta
-**Solucion**: Junction detection + heuristicas de orientacion + ordenamiento global.
 
 ### Resuelto: Preview no podia terminar el trazado
 **Solucion**: `box-sizing: content-box`, eliminado reset agresivo en mouseUp, hit radius `max(dotSize, 28)`, fix closure stale.
@@ -104,16 +110,18 @@ public/lecto_pruebas_2026/assets/trazados/
     ...
 ```
 
-Componente React destino: carga data.json, muestra outline como guia, dotted como puntos, usuario arrastra dragger por los puntos, al completar muestra fill SVG. Soporta multi-stroke.
+Componente React destino: carga `data.json`, muestra outline como guia, dotted como puntos, usuario arrastra dragger por los puntos, al completar muestra fill SVG. Soporta multi-stroke.
+
+**Pendiente de confirmar** (ver "Ajustes del contrato" arriba): si el componente soporta el nuevo formato de `letter-dotted.svg` (circles-per-coord), y si tolera la ausencia de `character.png`/`audio/*`.
 
 ---
 
 ## Notas para continuar el desarrollo
 
-1. **Iniciar servidor dev**: `npm run dev` en `trazados-generator/`
-2. **Archivo mas complejo**: `GeneratorPage.jsx` (~800 lineas)
-3. **Algoritmo critico**: `pathSampler.js` — esqueletonizacion v2 y muestreo
-4. **Estado global**: `window.__generatorState` (no Context ni Redux)
-5. **No hay tests unitarios** — todo se ha probado via build y revision de codigo
-6. **CSS**: Todo en `App.css`, no hay CSS modules
-7. **Patron de override**: 0 = auto-compute, >0 = valor forzado por el usuario
+1. **Iniciar servidor dev**: `npm run dev`
+2. **Archivos clave del flujo actual**: `GeneratorPage.jsx`, `ManualPathDrawer.jsx`, `letterMask.js`, `svgGenerator.js`, `exportUtils.js`, `thumGenerator.js`
+3. **Codigo legacy**: `pathSampler.js` y `computeGlyphCanvasSize`/`getAvailableChars` de `fontParser.js` no se usan
+4. **Estado global**: `window.__generatorState` (no Context ni Redux), `window.__trazadoPreview` (paso a Preview)
+5. **No hay tests unitarios** — se valida via build + uso manual
+6. **CSS**: Todo en `App.css`, sin CSS modules
+7. **Patron de override**: `0 = auto`, `>0 = forzado`, para `dotSize` y `animationPathStroke`

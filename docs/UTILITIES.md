@@ -1,307 +1,196 @@
 # Utilidades - Documentacion Tecnica
 
-## fontParser.js
-
-Modulo para parsear fuentes tipograficas y extraer glifos como paths SVG.
-
-### Dependencia
-- `opentype.js` v1.3.4
-
-### Funciones exportadas
-
-#### `parseFont(arrayBuffer)`
-Parsea un archivo de fuente desde un ArrayBuffer.
-- **Input**: `ArrayBuffer` del archivo .ttf/.otf/.woff
-- **Output**: Objeto font de opentype.js
-- **Uso**: `const font = parseFont(await file.arrayBuffer())`
-
-#### `computeGlyphCanvasSize(font, char, type, padding)` *(NUEVO)*
-Calcula las dimensiones naturales del canvas para un glifo, manteniendo su aspect ratio.
-- **Params**:
-  - `font`: Objeto font de opentype.js
-  - `char`: Caracter a medir
-  - `type`: `'ligada'` | `'mayusculas'`
-  - `padding`: Padding interno (default 20)
-- **Output**: `{ width: number, height: number }`
-- **Logica**:
-  - Altura base: 340px para ligada, 315px para mayusculas
-  - Escala el glifo para llenar la altura disponible (menos padding)
-  - Calcula ancho = glifo escalado + padding × 2
-  - Minimo 80px de ancho
-
-#### `glyphToSvgPathData(font, char, targetWidth, targetHeight, padding)`
-Extrae un glifo y lo convierte a un path SVG escalado y centrado.
-- **Params**:
-  - `font`: Objeto font de opentype.js
-  - `char`: Caracter a extraer (ej: `'a'`, `'A'`)
-  - `targetWidth`: Ancho del canvas destino (default 300)
-  - `targetHeight`: Alto del canvas destino (default 300)
-  - `padding`: Padding interno en px (default 20)
-- **Output**: `{ d, width, height, scale, offsetX, offsetY, bbox }`
-  - `d`: String del atributo "d" del path SVG, ya transformado
-  - `bbox`: Bounding box del glifo transformado `{ x, y, w, h }`
-- **Proceso**: Renderiza a fontSize=300, calcula escala para encajar en target manteniendo aspect ratio, aplica offset para centrar, transforma cada comando SVG (M, L, Q, C, Z)
-
-#### `getAvailableChars(font)`
-Lista todos los caracteres disponibles en la fuente.
-- **Output**: Array de strings con caracteres Unicode >= 32
+> **Importante (abril 2026)**: La app es manual-only. Las utilidades "core" del flujo actual son `letterMask.js`, `svgGenerator.js`, `thumGenerator.js`, `dataGenerator.js` y `exportUtils.js`. `fontParser.js` solo se usa para la fuente de referencia opcional (guia visual). **`pathSampler.js` ya no se importa en ninguna parte** — es codigo legacy conservado en el repo.
 
 ---
 
-## pathSampler.js (CRITICO - Algoritmo principal)
+## letterMask.js (NUEVO)
 
-Modulo que extrae la linea central (esqueleto) de una letra y genera las coordenadas de los puntos de trazado.
+Rasteriza el `letter-fill.svg` a una mascara binaria y precomputa una **transformada de distancia (chamfer 3-4)** para poder tirar puntos dibujados hacia el eje medial (esqueleto) de la letra de forma estable e independiente de la direccion.
 
-**Version 2** — Mejoras respecto a v1:
-- Rasterizacion a 2× resolucion (`RASTER_SCALE = 2`) para esqueletos mas suaves
-- Suavizado de 4 iteraciones ANTES del resampleo (elimina zigzag pixel a pixel)
-- Merge de segmentos casi colineales (angulo < 30°) que fueron sobre-divididos en junctions
-- Filtrado de segmentos muy cortos (< 8% del mas largo) como ruido
-- SVG paths con curvas Bezier cuadraticas en lugar de lineas rectas
-
-### Pipeline completo
-
-```
-SVG path "d" string
-    |
-    v
-skeletonize()                  --> Rasteriza a 2× + Zhang-Suen thinning
-    |
-    v
-splitSkeletonAtJunctions()     --> Detecta junctions, separa en segmentos
-    |
-    v
-mergeCollinearSegments()       --> Fusiona segmentos casi rectos (< 30°)
-    |
-    v
-filterShortSegments()          --> Elimina ruido (< 8% del mas largo)
-    |
-    v
-orientAndOrderSegments()       --> Orienta cada segmento y ordena globalmente
-    |
-    v
-smoothPoints(4 iter)           --> Suaviza antes de resamplear
-    |
-    v
-resamplePath()                 --> Remuestrea a N puntos equidistantes
-    |
-    v
-markCorners()                  --> Marca puntos con cambio de direccion > 45°
-```
+Usado por `ManualPathDrawer` para suavizar el trazado del usuario.
 
 ### Funciones exportadas
 
-#### `extractSkeletonSegments(pathD, width, height)` *(NUEVO)*
-Extrae los segmentos del esqueleto ya suavizados y sus longitudes.
-- **Output**: `{ segments: Array<Array<{x,y}>>, lengths: Array<number> }`
-- **Uso**: Se usa en GeneratorPage para calcular `computeDotCount()` por trazo
+#### `async buildLetterMask(fillSvgContent, width, height)`
+Construye la mascara y el campo de distancia.
+- **Input**: string del SVG fill, dimensiones
+- **Output**: `{ mask: Uint8Array, dist: Float32Array, width, height }` o `null` si falta algun input
+- **Proceso**: carga el SVG como imagen -> dibuja en canvas -> convierte a mascara binaria (`alpha > 32 = 1`) -> calcula distance transform (chamfer 3-4) con dos pasadas (forward + backward)
 
-#### `samplePathPointsMultiStroke(pathD, numPointsPerStroke, dotSize, width, height)`
-Funcion principal. Retorna un array de trazos con sus puntos.
-- **Input**: Path SVG "d" string, parametros de configuracion
-  - `numPointsPerStroke` puede ser un numero (igual para todos) o un Array de numeros (uno por trazo)
-- **Output**: `Array<{ dragger: [x, y], coordinates: Array<{ coords: [x, y], corner?: boolean }> }>`
-- **Proceso**:
-  1. Esqueletoniza el path SVG a 2× resolucion
-  2. Divide el esqueleto en segmentos en los puntos de junction
-  3. Merge de segmentos colineales y filtrado de ruido
-  4. Orienta cada segmento segun la direccion natural de escritura
-  5. Suaviza con 4 iteraciones
-  6. Remuestrea a N puntos (variable por trazo si se pasa array)
-  7. Marca esquinas
-  8. Filtra segmentos con < 3 puntos
+#### `snapToCenterline(point, maskInfo, opts = {})`
+Empuja suavemente un punto hacia el eje medial de la letra usando el **gradiente del campo de distancia** (que dentro de la forma apunta hacia el esqueleto — magnitud ~0 en el centro).
 
-#### `samplePathPoints(pathD, numPoints, dotSize, width, height)`
-Version retrocompatible que retorna solo el primer trazo.
-- **Output**: `{ dragger: [x, y], coordinates: [...] }`
+- **Input**:
+  - `point`: `{ x, y }` ya pasado por smoothing de entrada
+  - `maskInfo`: resultado de `buildLetterMask`, o `null` para no-op
+  - `opts.pullStrength` (default 1.2)
+  - `opts.maxStep` (default 2 px)
+  - `opts.pullRadius` (default 40) — radio maximo para buscar el pixel interior mas cercano si el punto cae fuera
+- **Output**: `{ x, y }` corregido
 
-#### `generateCenterlinePaths(pathD, width, height)`
-Genera paths SVG de la linea central para el letter-dotted.svg.
-- **Output**: `Array<{ id: string, d: string }>` (ej: `[{ id: 'path1', d: 'M...' }]`)
-- **Proceso**: Esqueletoniza, divide, merge, filtra, orienta, suaviza con 5 iteraciones, convierte a SVG path con curvas Bezier cuadraticas
+**Ventaja sobre un pull direccional**: al usar el gradiente del distance field, la correccion es siempre radial hacia el esqueleto y se atenua a cero cuando el punto ya esta centrado. No depende de la direccion del movimiento del usuario (que es ruidosa).
 
-#### `extractPathsFromSvg(svgString)`
-Extrae paths "d" y viewBox de un string SVG.
-- **Output**: `{ paths: Array<{ id, d }>, width, height }`
-
-### Constantes de configuracion
-
-| Constante | Valor | Descripcion |
-|-----------|-------|-------------|
-| `RASTER_SCALE` | 2 | Factor de resolucion para rasterizacion (2× = 760×680 para un canvas 380×340) |
-| `MIN_SEGMENT_RATIO` | 0.08 | Segmentos menores al 8% del mas largo se descartan |
-
-### Algoritmos internos
-
-#### Zhang-Suen Thinning (`zhangSuenThin`)
-Algoritmo de esqueletonizacion (thinning) iterativo en dos sub-pasos.
-Opera sobre el grid de alta resolucion (2×).
-
-1. Rasteriza el path SVG en un canvas invisible a RASTER_SCALE× resolucion
-2. Escala el contexto con `ctx.scale(RASTER_SCALE, RASTER_SCALE)` antes de fill
-3. Convierte a grid binario (alpha > 128 = 1, sino 0)
-4. Itera removiendo pixels del borde hasta que solo queda el esqueleto (1 pixel de ancho)
-5. Coordenadas resultantes se dividen por RASTER_SCALE para volver a letter-space
-
-```
-Numeracion de vecinos N8:
-  7  0  1
-  6  X  2
-  5  4  3
-```
-
-#### Junction Detection (`splitSkeletonAtJunctions`)
-Opera en raster-space (alta resolucion) y retorna segmentos en letter-space.
-
-Clasifica cada pixel del esqueleto:
-- **ENDPOINT** (1 vecino): extremo de una rama
-- **NORMAL** (2 vecinos): pixel de paso
-- **JUNCTION** (3+ vecinos): punto de ramificacion
-
-Proceso:
-1. Clasificar todos los pixels
-2. Remover pixels JUNCTION del grid para desconectar ramas
-3. Trazar cada componente conectado como un segmento ordenado
-4. Re-adjuntar coordenadas de junction a los extremos mas cercanos de cada segmento (distancia <= 3px)
-5. Convertir coordenadas de raster-space a letter-space (÷ RASTER_SCALE)
-
-#### Merge de Segmentos Colineales (`mergeCollinearSegments`)
-Cuando un junction divide un trazo que era continuo (ej: una linea recta cruzando una interseccion), lo fusiona.
-
-Para cada par de segmentos:
-1. Busca extremos cercanos (< 4px Manhattan distance)
-2. Calcula vectores de direccion en los ultimos 6 puntos de cada extremo
-3. Si el angulo entre ellos < 30° (PI/6), los fusiona
-4. Repite hasta que no hay mas merges posibles
-
-#### Filtrado de Segmentos Cortos (`filterShortSegments`)
-Calcula la longitud acumulada de cada segmento y descarta los que son < 8% del segmento mas largo. Siempre mantiene al menos 1 segmento.
-
-#### Stroke Orientation (`orientAndOrderSegments`)
-Para cada segmento decide la direccion:
-- **Vertical/diagonal** (deltaY > deltaX * 0.5): Inicio en el punto mas ARRIBA (menor Y)
-- **Horizontal** (deltaY <= deltaX * 0.5): Inicio en el punto mas a la IZQUIERDA (menor X)
-
-Ordenacion global: topmost first (menor Y), tie-break leftmost (menor X), tolerancia 5px.
-
-#### Tracing (`traceConnected`)
-Sigue una cadena de pixels conectados usando "greedy neighbor-following":
-- Comienza en un pixel (preferiblemente endpoint)
-- En cada paso, elige el vecino no visitado cuya direccion sea mas consistente con la direccion actual (producto punto)
-- Termina cuando no hay vecinos no visitados
-
-#### Resampling (`resamplePath`)
-Distribuye N puntos equidistantes a lo largo del camino:
-1. Calcula longitud acumulada del camino
-2. Divide la longitud total en N-1 intervalos iguales
-3. Interpola linealmente entre puntos originales para cada posicion target
-
-#### Smoothing (`smoothPoints`)
-Suaviza los puntos con promedio ponderado iterativo:
-- Peso: prev 25% + curr 50% + next 25%
-- Mantiene primer y ultimo punto sin cambio
-- 4 iteraciones para dotList, 5 para centerline SVG paths
-
-#### SVG Path Conversion (`pointsToSvgPath`)
-Convierte puntos a un SVG path "d" string usando curvas Bezier cuadraticas (Q) a traves de midpoints para mayor suavidad, en lugar de lineas rectas (L).
-
-#### Corner Detection (`markCorners`)
-Para cada punto intermedio:
-1. Calcula angulo de entrada (punto anterior -> actual)
-2. Calcula angulo de salida (actual -> siguiente)
-3. Si la diferencia absoluta > PI/4 (45 grados), marca `corner: true`
+Si `maskInfo === null` o si el punto esta muy cerca del esqueleto (`gmag < 0.15`), retorna el punto sin cambios. Si el punto cae fuera de la letra, primero busca en espiral el interior mas cercano (dentro de `pullRadius`) y opera desde ahi.
 
 ---
 
 ## svgGenerator.js
 
-Genera los tres tipos de SVG necesarios.
+Genera los SVGs del bundle. Incluye dos caminos: con fuente de referencia (generadores "normales") y sin ella (generadores "FromStrokes" como fallback).
 
 ### Funciones exportadas
 
 #### `generateFillSvg(pathD, width, height)`
-- Genera `letter-fill.svg`
+Fill SVG a partir de un path del glifo de la fuente de referencia.
 - Path con `id="fill"` y `style="fill-rule:nonzero;"`
 
-#### `generateOutlineSvg(pathD, width, height, strokeWidth)`
-- Genera `letter-outline.svg`
-- Path con `id="contorno"` y estilo de contorno sin relleno
-- `strokeWidth` default: 3
+#### `generateFillSvgFromStrokes(strokePaths, width, height, strokeWidth = 40)` (NUEVO)
+Fill SVG fallback cuando no hay fuente. Dibuja cada stroke del usuario como un path engrosado (no relleno real, sino stroke grueso) para aproximar la silueta.
+- Cada path con `id="fill1"`, `id="fill2"`, ...
 
-#### `generateDottedSvg(strokePaths, width, height)`
-- Genera `letter-dotted.svg`
-- Input: `Array<{ id, d }>` - paths de la linea central
-- Grupo contenedor con `id="path"`
-- Cada path con `id="path1"`, `id="path2"`, etc.
-- `stroke-dasharray: 0.1,16` para efecto punteado
+#### `generateOutlineSvg(pathD, width, height, strokeWidth = 3)`
+Outline SVG a partir del path de la fuente de referencia.
+- Path con `id="contorno"` sin fill
+
+#### `generateOutlineSvgFromStrokes(strokePaths, width, height, borderWidth = 3)` (NUEVO)
+Outline fallback. Cada stroke como path fino.
+- Cada path con `id="contorno1"`, `id="contorno2"`, ...
+
+#### `generateDottedSvg(dotList, width, height, dotRadius = 6)` (**FIRMA NUEVA**)
+**Ojo**: la firma cambio. Antes tomaba `strokePaths: Array<{ id, d }>` y emitia paths con `stroke-dasharray`. Ahora toma **el `dotList` completo** y emite un `<circle>` por cada coordenada, agrupado por trazo.
+
+- **Input**: `dotList` (array de `{ dragger, coordinates: [{ coords: [x,y], corner? }, ...] }`)
+- **Output**: string SVG. Un `<g id="path{i+1}">` por trazo, conteniendo un `<circle cx cy r fill="#888"/>` por coordenada.
+
+Los `id`s de los grupos siguen siendo `path1`, `path2`, ... y concuerdan con los selectores de `letterAnimationPath`.
+
+---
+
+## thumGenerator.js (NUEVO)
+
+Rasteriza el fill de la letra + los puntos del trazado a una PNG (`thum.png`), que se empaqueta automaticamente en el ZIP exportado.
+
+### Funciones exportadas
+
+#### `async generateThumPngBlob({ fillPathD, strokePaths, dotList, width, height, dotRadius, fallbackStrokeWidth })`
+- **Input**:
+  - `fillPathD`: path `"d"` del glifo de la fuente de referencia (si hay)
+  - `strokePaths`: fallback cuando no hay `fillPathD` — se engruesan (`fallbackStrokeWidth`, default 40) para formar silueta
+  - `dotList`: lista de trazos, se dibuja un circulo magenta (`#e91e63`) en cada `coords`
+  - `width`, `height`: tamaño de salida (typicamente `letterSize` del data.json)
+  - `dotRadius`: radio de los circulos (default 6)
+- **Output**: `Blob` PNG
+
+**Proceso**: construye un SVG en memoria con fill + circles -> lo carga en un `<img>` -> dibuja en un `<canvas>` del tamaño objetivo -> exporta a blob PNG via `canvas.toBlob`.
 
 ---
 
 ## dataGenerator.js
 
-Genera el data.json, maneja nomenclatura y computa valores dinamicos.
+Genera el `data.json`, maneja nomenclatura y computa valores por letra.
 
 ### Funciones exportadas
 
 #### `generateDataJson({ letter, type, letterSize, dotList, animationPaths, animationPathStroke, dotSize })`
-Construye el objeto data.json completo.
+Construye el objeto `data.json` completo.
 
 **Logica del campo `letter`**:
-- Ligada: `letter.toLowerCase()` -> `"a"`, `"ch"`, `"ll"`, `"ny"`
-- Mayusculas: `"Upper" + capitalize(letter)` -> `"UpperA"`, `"UpperCh"`, `"UpperLl"`
+- Ligada: `letter.toLowerCase()` -> `"a"`, `"ch"`, `"ll"`, `"ñ"` (sin mapeo a `"ny"`)
+- Mayusculas: `"Upper" + Capitalized` -> `"UpperA"`, `"UpperCh"`, `"UpperLl"`, `"UpperÑ"`
 
 **Calculo de `time` en animationPaths**:
-- `Math.max(2, Math.round(length / 50))` - minimo 2 segundos
+- Si el caller provee `p.time`, se usa tal cual
+- Fallback: `Math.max(2, Math.round(p.length / 50))`
+- `GeneratorPage.generateForLetter` actualmente pasa `time = Math.max(2, Math.round(coordinates.length / 4))`
 
 #### `getFolderName(letter, type)`
-Genera nombre de carpeta.
-- Caracteres especiales: n -> `ny`, ch y ll se mantienen
+Nombre de carpeta.
+- Mapeo especial: `ñ` -> `ny`; `ch` y `ll` se mantienen
 - Ligada: `trazado-letra-{base}`
 - Mayusculas: `trazado-letra-{base}-mayus`
 
-#### `computeLetterParams(letter, type, canvasW)` *(NUEVO)*
-Computa dotSize y animationPathStroke recomendados para una letra, basado en los patrones del proyecto existente.
+#### `computeLetterParams(letter, type, canvasW)`
+Computa `dotSize` y `animationPathStroke` para una letra.
 
 - **Input**: letra, tipo, ancho del canvas
 - **Output**: `{ dotSize: number, animationPathStroke: number }`
-- **Logica mayusculas**: dotSize 34 (40 si ancho > 240), stroke 10 (12 si ancho > 350)
-- **Logica ligada**: Basado en ancho del canvas (28-38) con overrides especificos para e, i, k, m, n, u, p
+- **Logica mayusculas**: `dotSize` = 34 (40 si `canvasW > 240`), `stroke` = 10 (12 si `canvasW > 350`)
+- **Logica ligada**: ramas por `canvasW` (26-38) + overrides especificos para `e`, `i`, `k`, `m`, `n`, `u`, `p`
 
-#### `computeDotCount(pathLengthPx)` *(NUEVO)*
-Calcula la cantidad recomendada de puntos para un trazo segun su longitud.
-- **Formula**: `round(pathLengthPx / 6.5)`, clamped a [3, 90]
-- **Ratio**: ~1 punto cada 6.5 px de longitud de trazo
+#### `computeDotCount(pathLengthPx)`
+Cantidad recomendada de puntos para un trazo segun su longitud.
+- **Formula**: `round(pathLengthPx / 6.5)`, clamped a `[3, 90]`
+- **Nota**: expuesto pero **no se llama desde la UI actual** (el modo manual usa el `dotCount` que el usuario configura, igual para todos los trazos)
 
 ### Constantes exportadas
 
-- `SPANISH_LETTERS`: Array de 27 letras del abecedario espanol (a-z + n)
+- `SPANISH_LETTERS`: 27 letras (a-z + ñ)
 - `SPECIAL_COMBOS`: `['ch', 'll']`
 
 ---
 
-## exportUtils.js
+## exportUtils.js (REFACTORIZADO)
 
-Exportacion de trazados como ZIP.
+Exportacion de trazados como ZIP. Ahora **async** (porque genera `thum.png` rasterizando en `<canvas>`).
 
 ### Dependencias
 - `JSZip` - generacion de ZIP
 - `file-saver` - descarga del blob
+- `thumGenerator` - genera `thum.png`
 
 ### Funciones exportadas
 
-#### `exportTrazado(trazadoData, options)`
-Crea un ZIP con todos los archivos de un trazado individual.
-- Retorna `{ zip, folder }` (instancia JSZip)
-- Crea placeholders automaticos para assets no proporcionados
+#### `async downloadSingleTrazado(trazado)`
+Crea un ZIP con una sola letra y lo descarga como `{folderName}.zip`.
 
-#### `exportAllTrazados(trazadosList, baseType)`
-Exporta multiples trazados en un solo ZIP agrupados bajo `ligada/` o `mayusculas/`.
-- Descarga automaticamente como `trazados-{baseType}.zip`
+#### `async exportAllTrazados(trazadosList, baseType)`
+Exporta multiples trazados en un solo ZIP agrupados bajo `ligada/` o `mayusculas/`. Descarga como `trazados-{baseType}.zip`.
 
-#### `downloadSingleTrazado(trazadoData)`
-Wrapper de conveniencia: crea ZIP y descarga.
+### Helper interno `writeTrazadoFiles(folder, trazado)`
+Escribe en el folder de JSZip:
+1. `letter-fill.svg`, `letter-outline.svg`, `letter-dotted.svg`, `data.json`
+2. `thum.png` generado por `generateThumPngBlob`, con:
+   - `width`, `height` = `data.json.letterSize` (default `[380, 340]`)
+   - `dotRadius` = `max(4, round(dotSize / 4))`
 
-### Placeholders generados
+**Ya no escribe**: `character.png`, `fondo.png`, `audio/es/title.mp3`, `audio/val/title.mp3`. Tampoco hay placeholders silent-MP3 / 1×1-PNG.
 
-- **createSilentMp3()**: 32 bytes, header MPEG1 Layer 3 valido
-- **createPlaceholderPng()**: PNG 1x1 transparente desde base64
+`exportTrazado` (que antes retornaba `{ zip, folder }`) fue eliminado.
+
+---
+
+## fontParser.js (SOLO PARA GUIA VISUAL)
+
+Parsea fuentes tipograficas y extrae glifos como paths SVG. **Ya no es parte del flujo de generacion** — solo se usa cuando el usuario carga una fuente de referencia opcional en el paso 1, para:
+
+1. Mostrar la forma de la letra bajo el canvas de `ManualPathDrawer` (opacity 8% + 20%)
+2. Generar `letter-fill.svg` y `letter-outline.svg` en el export (en lugar de los fallbacks `FromStrokes`)
+3. Construir la mascara de distancia via `buildLetterMask` para el auto-centrado del cursor
+
+### Funciones exportadas
+
+- **`parseFont(arrayBuffer)`**: parsea TTF/OTF/WOFF via opentype.js
+- **`glyphToSvgPathData(font, char, targetWidth, targetHeight, padding)`**: extrae un glifo y lo escala/centra al canvas objetivo. Retorna `{ d, width, height, scale, offsetX, offsetY, bbox }`
+- **`computeGlyphCanvasSize(font, char, type, padding)`**: computa dimensiones "naturales" del canvas. **Ya no se usa** en el flujo actual (el tamaño de canvas viene siempre del usuario). Conservado por si se reintroduce el modo font.
+- **`getAvailableChars(font)`**: lista caracteres disponibles (tampoco se usa en la UI actual)
+
+---
+
+## pathSampler.js (LEGACY — no importado)
+
+Modulo de esqueletonizacion / muestreo de puntos heredado del antiguo modo `font`/`svg`. **No lo importa ningun archivo de la app actual** — el modo manual usa un `resample` + `smooth` propios dentro de `ManualPathDrawer.jsx`.
+
+Se conserva en el repo por dos razones:
+1. Referencia para re-introducir generacion automatica desde fuente en el futuro.
+2. El algoritmo (Zhang-Suen thinning + junction detection + merge colineal + smoothing + resample) esta bien documentado y es dificil de reconstruir desde cero.
+
+Si se decide depurar el repo, este archivo puede eliminarse sin romper nada.
+
+Funciones que exporta (todas actualmente muertas):
+- `samplePathPoints`, `samplePathPointsMultiStroke` — muestreo
+- `extractSkeletonSegments` — extrae segmentos + longitudes
+- `generateCenterlinePaths` — paths SVG de linea central con curvas Bezier
+- `extractPathsFromSvg` — parser de paths + viewBox desde un string SVG
+
+Constantes: `RASTER_SCALE = 2`, `MIN_SEGMENT_RATIO = 0.08`.

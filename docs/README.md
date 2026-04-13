@@ -2,14 +2,15 @@
 
 ## Descripcion General
 
-Aplicacion standalone Vite + React para generar ejercicios interactivos de trazado de letras ("trazados") para una app educativa infantil React. Genera todos los archivos necesarios (SVGs, data.json, audios, imagenes) para cada letra del abecedario espanol, en dos variantes: **ligada** (cursiva minusculas) y **mayusculas**.
+Aplicacion standalone Vite + React para generar ejercicios interactivos de trazado de letras ("trazados") para una app educativa infantil React. Por cada letra se generan `data.json`, los tres SVGs (`letter-fill`, `letter-outline`, `letter-dotted`) y un `thum.png` auto-generado, en dos variantes: **ligada** (cursiva minusculas) y **mayusculas**.
+
+> **Refactor (abril 2026)**: La app es ahora **solo de dibujo manual**. Los modos `font` y `svg` se eliminaron junto con todo el pipeline de esqueletonizacion automatica. Los archivos `src/utils/pathSampler.js` y `src/utils/fontParser.js` ya no se importan en la app (la fuente solo se usa como guia visual para dibujar). El paso 4 dejo de aceptar uploads de audios/imagenes — `thum.png` se genera automaticamente al exportar y no se producen placeholders de audio/imagenes.
 
 ## Instalacion y Ejecucion
 
 ```bash
-cd trazados-generator
 npm install
-npm run dev      # Servidor de desarrollo en http://localhost:5173
+npm run dev      # Servidor de desarrollo en http://localhost:5173 (auto-abre)
 npm run build    # Build de produccion
 npm run preview  # Preview del build de produccion
 ```
@@ -19,11 +20,13 @@ npm run preview  # Preview del build de produccion
 npx vite build --outDir /tmp/trazados-dist
 ```
 
+No hay tests, linter ni typecheck configurados. La "correctitud" se valida compilando, corriendo el dev server y probando el wizard + PreviewPage manualmente.
+
 ## Stack Tecnologico
 
 - **Vite 6** + **@vitejs/plugin-react** - Bundler y HMR
 - **React 18** + **React Router DOM 6** - UI y navegacion SPA
-- **opentype.js 1.3.4** - Parsing de fuentes TTF/OTF/WOFF y extraccion de glifos
+- **opentype.js 1.3.4** - Parsing de fuente opcional (solo para mostrar la letra como guia visual en el dibujo manual)
 - **JSZip 3.10.1** - Generacion de archivos ZIP
 - **file-saver 2.0.5** - Descarga de archivos desde el navegador
 
@@ -34,116 +37,115 @@ trazados-generator/
   index.html
   package.json
   vite.config.js
-  docs/                           # Documentacion del proyecto
-    README.md                     # Este archivo
-    DATA-FORMATS.md               # Schemas de data.json y SVGs
-    UTILITIES.md                  # Documentacion de utilidades
-    COMPONENTS.md                 # Documentacion de componentes
-    PENDING-TASKS.md              # Tareas pendientes y problemas
+  docs/                             # Documentacion del proyecto
+    README.md                       # Este archivo
+    DATA-FORMATS.md                 # Schemas de data.json y SVGs
+    UTILITIES.md                    # Documentacion de utilidades
+    COMPONENTS.md                   # Documentacion de componentes
+    PENDING-TASKS.md                # Tareas pendientes y problemas
+  ejemplo/
+    trazado-letra-a/                # Bundle de referencia (formato antiguo con audio/imagenes)
   src/
-    main.jsx                      # Entry point con BrowserRouter
-    App.jsx                       # Layout principal con navegacion
-    App.css                       # Estilos globales de toda la app
+    main.jsx                        # Entry point con BrowserRouter
+    App.jsx                         # Layout principal con navegacion
+    App.css                         # Estilos globales de toda la app
     pages/
-      HomePage.jsx                # Landing page con links
-      GeneratorPage.jsx           # Wizard principal de 4 pasos (~800 lineas)
-      PreviewPage.jsx             # Preview interactivo del trazado
+      HomePage.jsx                  # Landing page con 3 feature cards
+      GeneratorPage.jsx             # Wizard principal de 4 pasos
+      PreviewPage.jsx               # Preview interactivo del trazado
     components/
-      ManualPathDrawer.jsx        # Componente de dibujo manual de trazos
+      ManualPathDrawer.jsx          # Canvas de dibujo manual de trazos
     utils/
-      fontParser.js               # Parsing de fuentes + calculo de canvas size dinamico
-      pathSampler.js              # Esqueletonizacion 2x, suavizado, sampling de puntos
-      svgGenerator.js             # Generacion de SVGs (fill, outline, dotted)
-      dataGenerator.js            # Generacion de data.json + calculo dinamico de params
-      exportUtils.js              # Exportacion ZIP con JSZip
+      letterMask.js                 # Distance transform + medial-axis snapping (usado en dibujo)
+      svgGenerator.js               # Generacion de SVGs (fill, outline, dotted + fallbacks de strokes)
+      thumGenerator.js              # Rasteriza fill + dots a thum.png
+      dataGenerator.js              # Generacion de data.json + nombres de carpeta + computeLetterParams/computeDotCount
+      exportUtils.js                # Exportacion ZIP con JSZip
+      fontParser.js                 # Parsing opcional de fuente de referencia (solo guia visual)
+      pathSampler.js                # LEGACY — no se importa en ninguna parte de la app actual
 ```
 
 ## Flujo de la Aplicacion
 
 ### GeneratorPage - Wizard de 4 Pasos
 
-**Paso 1: Seleccionar origen** - Tres modos disponibles (grid 3 columnas):
-1. **Desde Tipografia** (`mode='font'`): Cargar archivo TTF/OTF/WOFF. Se usa opentype.js para extraer los glifos.
-2. **Desde SVG** (`mode='svg'`): Importar SVGs manuales (fill, outline, dotted) por cada letra.
-3. **Trazado Manual** (`mode='manual'`): Dibujar el recorrido de cada trazo con el cursor. Opcionalmente carga una fuente de referencia visual.
+**Paso 1: Inicio** - Introduccion + carga opcional de fuente de referencia. La fuente solo sirve como guia visual al dibujar (y para generar `letter-fill.svg`/`letter-outline.svg`). Boton "Siguiente".
 
-**Paso 2: Seleccionar tipo y letras** - Elegir entre "ligada" o "mayusculas", y seleccionar las letras a generar (27 letras + ch, ll).
+**Paso 2: Seleccionar tipo y letras** - Elegir entre "ligada" o "mayusculas", y seleccionar **una sola letra** del grid (la seleccion es exclusiva — hacer click en otra letra reemplaza la seleccion actual). El abecedario incluye 27 letras (a-z + ñ) + ch + ll.
 
-**Paso 3: Configurar y generar** - Parametros configurables (todos editables):
-- Ancho/alto del canvas — en modo font se calcula automaticamente si se deja en 380/340, o se puede forzar un valor fijo
-- Cantidad de puntos por trazo — auto (0) calcula segun longitud del trazo, o se fija un valor
-- Tamano de punto / dotSize — auto (0) calcula segun tipo y ancho, o se fija un valor
-- Grosor del trazo de animacion — auto (0) calcula segun tipo, o se fija un valor
-- En modo SVG: subir SVGs por letra
-- En modo manual: dibujar trazos por letra con ManualPathDrawer
+**Paso 3: Configurar y generar** - Parametros configurables (todos siempre habilitados):
+- Ancho/alto del canvas (default 380 × 340)
+- Cantidad de puntos por trazo — `dotCount` (controla cuantos puntos se muestrean al finalizar el dibujo)
+- `dotSize` — tamaño visual del punto. `0` = auto via `computeLetterParams`. `>0` = forzado
+- `animationPathStroke` — grosor del trazo. `0` = auto via `computeLetterParams`. `>0` = forzado
 
-**Paso 4: Assets y exportacion** - Ver trazados generados con valores computados por letra (canvas, dotSize, stroke, puntos por trazo), subir assets opcionales (audios, imagenes), preview individual, exportar individual o masivo como ZIP.
+Bajo la config aparecen pestañas por letra + el `ManualPathDrawer`. Se dibuja el recorrido de cada trazo con el cursor. Al guardar una letra (Enter), se auto-avanza a la siguiente sin dibujo. Boton "Generar" exporta los datos al estado y avanza al paso 4.
 
-### Valores Dinamicos (modo font)
+**Paso 4: Assets y exportacion** - Lista de trazados generados mostrando valores computados por letra (canvas, dotSize, stroke, cantidad de trazos, puntos por trazo). Botones: `Preview` (navega a `/preview`), `Exportar` (ZIP individual), `Exportar todos como ZIP` (ZIP masivo). No hay uploads de assets — `thum.png` se genera automaticamente y ya no se incluyen `character.png`, `fondo.png` ni audios.
 
-En modo tipografia, los valores se calculan automaticamente para cada letra imitando los patrones del proyecto existente `lecto_pruebas_2026`:
+### Valores Dinamicos
+
+Solo `dotSize` y `animationPathStroke` se calculan dinamicamente (via `computeLetterParams(letter, type, canvasW)`). Canvas size ya no se auto-computa — es siempre lo que el usuario configura en el paso 3.
 
 | Parametro | Ligada | Mayusculas | Como se calcula |
 |-----------|--------|------------|-----------------|
-| Ancho canvas | 157–600 px | 95–440 px | Aspect ratio natural del glifo |
-| Alto canvas | ~340 px | ~315 px | Fijo por tipo |
-| dotSize | 26–40 | 33–40 | Basado en ancho del canvas + overrides por letra |
-| animationPathStroke | 10–18 | 10–12 | Basado en tipo y ancho |
-| Puntos por trazo | 2–84 | 3–37 | ~1 punto cada 6.5 px de longitud del trazo |
+| dotSize | 26–40 | 34 (40 si canvasW > 240) | Basado en canvasW + overrides para e, i, k, m, n, u, p |
+| animationPathStroke | 10–18 | 10 (12 si canvasW > 350) | Basado en canvasW |
 
-El usuario puede forzar cualquier valor ingresando un numero > 0 en el campo correspondiente.
+**Patron de override**: `0 = auto-compute` en los inputs, `>0 = forzar el valor`.
 
 ### Persistencia de Estado
 
-El estado del generador se persiste en `window.__generatorState` para sobrevivir la navegacion entre paginas (ir a Preview y volver). El paso actual se lee/escribe en el URL param `?step=N`.
+El estado del generador se persiste en `window.__generatorState` en un `useEffect` sin dependencias (se ejecuta cada render) para sobrevivir a la navegacion a Preview y de vuelta. El paso actual se lee/escribe en el URL param `?step=N`. El preview recibe datos via `window.__trazadoPreview`.
 
 ### PreviewPage - Preview Interactivo
 
 Simula el trazado real como lo haria el componente React de la app educativa:
-- Muestra el SVG outline como guia, el dotted como referencia de puntos
+- Muestra el outline SVG como guia tenue de fondo, el dotted como puntos
 - El usuario hace click para iniciar, luego mueve el cursor por los puntos
 - Hit radius generoso: `max(dotSize, 28)` px
 - Multi-stroke: al completar un trazo avanza al siguiente
 - Al completar todo: muestra el fill SVG con animacion fade-in
-- Modo debug: visualiza todos los dots, distancias, coordenadas
+- Modo debug (activo por defecto): visualiza todos los dots con indices, el hit radius, distancia al target, y el JSON del dotList
 
 ## Estructura de Salida por Letra
 
-Cada letra genera una carpeta con esta estructura:
+Cada letra genera una carpeta con esta estructura (lo que empaqueta el ZIP):
 
 ```
 trazado-letra-{nombre}/
   data.json               # Datos del trazado (dotList, metadata)
   letter-fill.svg         # SVG con la letra rellena (path id="fill")
   letter-outline.svg      # SVG con el contorno (path id="contorno")
-  letter-dotted.svg       # SVG con path punteado de la linea central (group id="path")
-  character.png           # Imagen del personaje (placeholder si no se sube)
-  thum.png                # Thumbnail (placeholder si no se sube)
-  fondo.png               # Imagen de fondo (placeholder si no se sube)
-  audio/
-    es/
-      title.mp3           # Audio del titulo en espanol (silent placeholder si no se sube)
-    val/
-      title.mp3           # Audio del titulo en valenciano (silent placeholder si no se sube)
+  letter-dotted.svg       # SVG con un <circle> por coordenada, agrupados por trazo (<g id="pathN">)
+  thum.png                # Rasterizacion auto-generada de fill + dots
 ```
+
+> **Nota**: El `data.json` aun declara campos `character: "character.png"` y `title.audio.{es,val}: "audio/{es,val}/title"`, pero esos archivos **ya no se incluyen en el ZIP**. Si el componente consumidor los requiere, habra que proveerlos aparte o dejar de emitir esos campos.
 
 ### Nombrado de Carpetas
 
-- Ligada: `trazado-letra-a`, `trazado-letra-b`, ..., `trazado-letra-ny` (para n), `trazado-letra-ch`, `trazado-letra-ll`
+- Ligada: `trazado-letra-a`, `trazado-letra-b`, ..., `trazado-letra-ny` (para ñ), `trazado-letra-ch`, `trazado-letra-ll`
 - Mayusculas: `trazado-letra-a-mayus`, `trazado-letra-b-mayus`, ...
 
 ### Exportacion Masiva
 
-Al exportar todas, se agrupan bajo una carpeta con el tipo:
+Al exportar todos, se agrupan bajo una carpeta con el tipo:
 ```
-ligada/
-  trazado-letra-a/
-  trazado-letra-b/
-  ...
+trazados-ligada.zip
+  ligada/
+    trazado-letra-a/
+    trazado-letra-b/
+    ...
 ```
 o
 ```
-mayusculas/
-  trazado-letra-a-mayus/
-  ...
+trazados-mayusculas.zip
+  mayusculas/
+    trazado-letra-a-mayus/
+    ...
 ```
+
+### Bundle de referencia
+
+`ejemplo/trazado-letra-a/` conserva el formato **antiguo** (con `character.png`, `fondo.png`, `audio/es/title.mp3`, `audio/val/title.mp3` y un `letter-dotted.svg` con `stroke-dasharray`). Es util como referencia del shape que el componente consumidor soportaba historicamente, pero **no** refleja lo que el generador produce hoy.
