@@ -52,23 +52,33 @@ export function generateOutlineSvgFromStrokes(strokePaths, width, height, border
 }
 
 /**
- * Dotted SVG: renders a circle at each sampled coordinate of the trazado,
- * grouped per stroke with selector-compatible ids (#path1, #path2, …).
+ * Dotted SVG: renders each stroke as a dashed path along the stroke's "d"
+ * string, producing the dotted-line appearance the downstream player expects.
+ *
+ * Shape of the output (matches the historical lecto_pruebas_2026 format):
+ *   <g><g><g id="path">
+ *     <path id="path1" d="..." style="fill:none;stroke:#ccc;...stroke-dasharray:0.1,16;"/>
+ *     <path id="path2" .../>
+ *   </g></g></g>
+ *
+ * The selectors `#path1`, `#path2`, … in data.json.letterAnimationPath target
+ * the individual <path> elements (not the wrapper <g id="path">).
+ *
+ * @param {Array<{ id?: string, d: string }>} strokePaths  one entry per stroke
+ * @param {number} width
+ * @param {number} height
+ * @param {number} strokeWidth  stroke thickness in px (default 8, the historical value)
  */
-export function generateDottedSvg(dotList, width, height, dotRadius = 6) {
-  const groups = dotList.map((dl, i) => {
-    const circles = (dl.coordinates || []).map(c => {
-      const [x, y] = c.coords || [];
-      return `<circle cx="${x}" cy="${y}" r="${dotRadius}" fill="#888"/>`;
-    }).join('');
-    return `<g id="path${i + 1}">${circles}</g>`;
-  }).join('\n      ');
+export function generateDottedSvg(strokePaths, width, height, strokeWidth = 8) {
+  const paths = (strokePaths || []).map((p, i) =>
+    `<path id="path${i + 1}" d="${p.d}" style="fill:none;stroke:#ccc;stroke-width:${strokeWidth}px;stroke-linecap:round;stroke-dasharray:0.1,16;"/>`
+  ).join('\n      ');
 
   return `<?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
 <svg width="100%" height="100%" viewBox="0 0 ${width} ${height}" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xml:space="preserve" style="fill-rule:evenodd;clip-rule:evenodd;stroke-linejoin:round;stroke-miterlimit:1.41421;">
-  <g><g>
-      ${groups}
-  </g></g>
+  <g><g><g id="path">
+      ${paths}
+  </g></g></g>
 </svg>`;
 }

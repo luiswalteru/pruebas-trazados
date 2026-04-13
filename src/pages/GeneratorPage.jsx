@@ -38,7 +38,9 @@ export default function GeneratorPage() {
 
   // Manual drawing state
   const [manualDrawings, setManualDrawings] = useState(_persisted.manualDrawings || {})  // { letter: { dotList, strokePaths } }
-  const [manualActiveLetter, setManualActiveLetter] = useState(null)
+  // The active letter in the drawer is always the single selected letter (only
+  // one at a time is allowed), so we derive it from selectedLetters[0].
+  const activeLetter = selectedLetters[0] || null
   // Optional reference font for manual mode (shows letter shape as guide)
   const [refFont, setRefFont] = useState(_persisted.refFont || null)
   const [refFontName, setRefFontName] = useState(_persisted.refFontName || '')
@@ -86,13 +88,10 @@ export default function GeneratorPage() {
     } catch { return { fillSvg: '', outlineSvg: '', fillPathD: '' } }
   }, [refFont, type, canvasWidth, canvasHeight])
 
-  // Manual drawing complete for a letter
+  // Manual drawing complete for the active letter
   const handleManualComplete = useCallback((letter, result) => {
     setManualDrawings(prev => ({ ...prev, [letter]: result }))
-    // Auto-advance to next letter without one
-    const nextUndone = selectedLetters.find(l => l !== letter && !manualDrawings[l])
-    if (nextUndone) setManualActiveLetter(nextUndone)
-  }, [selectedLetters, manualDrawings])
+  }, [])
 
   // Generate trazado for a single letter from the manual drawing
   const generateForLetter = useCallback((letter) => {
@@ -124,9 +123,10 @@ export default function GeneratorPage() {
     const outlineSvg = refSvgs.outlineSvg
       || generateOutlineSvgFromStrokes(strokePaths, w, h, 3)
 
-    // Letter-dotted.svg: one circle per sampled coordinate, grouped per stroke
-    const dottedRadius = Math.max(4, Math.round(effDotSize / 4))
-    const dottedSvg = generateDottedSvg(dotList, w, h, dottedRadius)
+    // Letter-dotted.svg: dashed path per stroke (historical format)
+    // stroke-width mirrors animationPathStroke so the dotted look matches the
+    // on-screen animation weight.
+    const dottedSvg = generateDottedSvg(strokePaths, w, h, effStroke)
 
     const animationPaths = strokePaths.map((p, i) => ({
       length: dotList[i]?.coordinates?.length || 40,
@@ -340,54 +340,32 @@ export default function GeneratorPage() {
           </div>
 
           {/* -------- Manual drawing interface -------- */}
-          {selectedLetters.length > 0 && (
+          {activeLetter && (
             <div style={{ marginBottom: 24 }}>
-              <h3>Dibujar trazados</h3>
+              <h3>
+                Dibujar trazado — letra{' '}
+                <span style={{ color: '#f04e23' }}>
+                  {type === 'mayusculas' ? activeLetter.toUpperCase() : activeLetter}
+                </span>
+                {manualDrawings[activeLetter] && ' ✓'}
+              </h3>
               <p className="info-text">
-                Selecciona una letra y dibuja su recorrido. Haz click y arrastra para cada trazo.
-                Suelta el mouse para terminar un trazo y haz click de nuevo para empezar otro.
+                Haz click y arrastra para cada trazo. Suelta el mouse para terminar un trazo
+                y haz click de nuevo para empezar otro.
               </p>
 
-              {/* Letter tabs */}
-              <div className="manual-letter-tabs">
-                {selectedLetters.map(letter => {
-                  const done = !!manualDrawings[letter]
-                  const active = manualActiveLetter === letter
-                  return (
-                    <button
-                      key={letter}
-                      className={`manual-tab-btn ${active ? 'active' : ''} ${done ? 'done' : ''}`}
-                      onClick={() => setManualActiveLetter(letter)}
-                    >
-                      {type === 'mayusculas' ? letter.toUpperCase() : letter}
-                      {done && ' ✓'}
-                    </button>
-                  )
-                })}
-              </div>
-
-              {/* Drawer for active letter */}
-              {manualActiveLetter && (
-                <ManualPathDrawer
-                  key={manualActiveLetter}
-                  letter={manualActiveLetter}
-                  type={type}
-                  fillSvg={getRefSvgs(manualActiveLetter).fillSvg}
-                  outlineSvg={getRefSvgs(manualActiveLetter).outlineSvg}
-                  width={canvasWidth}
-                  height={canvasHeight}
-                  dotCount={dotCount}
-                  dotSize={dotSize}
-                  onComplete={(result) => handleManualComplete(manualActiveLetter, result)}
-                  onCancel={() => setManualActiveLetter(null)}
-                />
-              )}
-
-              {!manualActiveLetter && (
-                <p style={{ textAlign: 'center', color: '#999', padding: 20 }}>
-                  Selecciona una letra de arriba para empezar a dibujar
-                </p>
-              )}
+              <ManualPathDrawer
+                key={activeLetter}
+                letter={activeLetter}
+                type={type}
+                fillSvg={getRefSvgs(activeLetter).fillSvg}
+                outlineSvg={getRefSvgs(activeLetter).outlineSvg}
+                width={canvasWidth}
+                height={canvasHeight}
+                dotCount={dotCount}
+                dotSize={dotSize}
+                onComplete={(result) => handleManualComplete(activeLetter, result)}
+              />
             </div>
           )}
 

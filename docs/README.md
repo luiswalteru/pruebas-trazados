@@ -117,7 +117,8 @@ trazado-letra-{nombre}/
   data.json               # Datos del trazado (dotList, metadata)
   letter-fill.svg         # SVG con la letra rellena (path id="fill")
   letter-outline.svg      # SVG con el contorno (path id="contorno")
-  letter-dotted.svg       # SVG con un <circle> por coordenada, agrupados por trazo (<g id="pathN">)
+  letter-dotted.svg       # SVG con un <path id="pathN"> dasheado por trazo, dentro de <g id="path">
+                          # (stroke-dasharray:0.1,16 + stroke-linecap:round genera el efecto punteado)
   thum.png                # Rasterizacion auto-generada de fill + dots
 ```
 

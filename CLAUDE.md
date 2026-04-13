@@ -57,20 +57,23 @@ If no reference font is loaded, `fillSvg` is empty, `buildLetterMask` yields `nu
 
 At finalize time (`handleFinalize`): for each stroke, `resample` to `dotCount` equidistant points, mark corners (angle delta > π/4), `toFixed(3)` coords, `toFixed(0)` on the first point for the `dragger`. `strokePaths` are built separately with a lighter `smooth(_, 2)` for the (now-unused) dotted-SVG fallback and for the `thum.png` generator.
 
-### `letter-dotted.svg` contract (changed!)
+### `letter-dotted.svg` contract
 
-**The dotted SVG format changed.** Historical docs and the `ejemplo/trazado-letra-a/` reference bundle describe a path with `stroke-dasharray: 0.1,16`. The current generator (`generateDottedSvg`) emits **one `<circle>` per sampled coordinate**, grouped per stroke:
+The downstream player expects **dashed paths**, one `<path id="path{i+1}">` per stroke, inside a `<g id="path">` wrapper:
 
 ```xml
-<g id="path1">
-  <circle cx="..." cy="..." r="..." fill="#888"/>
-  ...
-</g>
+<g><g><g id="path">
+  <path id="path1" d="M... L..." style="fill:none;stroke:#ccc;stroke-width:16px;stroke-linecap:round;stroke-dasharray:0.1,16;"/>
+  <path id="path2" .../>
+</g></g></g>
 ```
 
-The group ids (`path1`, `path2`, ...) still match the `letterAnimationPath[i].selector` in `data.json` — this is the load-bearing contract. If the downstream player expected dashed paths, either the player needs an update or `generateDottedSvg` needs to re-emit the old shape. See `docs/PENDING-TASKS.md`.
+- `stroke-dasharray: 0.1,16` + `stroke-linecap: round` is what produces the dotted look — `0.1` becomes a round cap (a "dot") and `16` is the gap in px.
+- `stroke-width` is passed as the effective `animationPathStroke` so the dots match the animation weight.
+- The `d` values come from `ManualPathDrawer.handleFinalize`'s `strokePaths` output — simple `M + L` paths built from smoothed stroke points.
+- `letterAnimationPath[i].selector` (`#path1`, `#path2`, …) targets the individual `<path>` elements inside the wrapper.
 
-Also note: `generateDottedSvg`'s signature changed. It now takes `(dotList, width, height, dotRadius)`, not `(strokePaths, width, height)`.
+`generateDottedSvg`'s signature is `(strokePaths, width, height, strokeWidth = 8)`. Do not pass `dotList` — during the brief circles-per-coord experiment the signature and format diverged; both have been reverted.
 
 ### Export
 

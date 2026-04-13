@@ -57,13 +57,14 @@ Outline SVG a partir del path de la fuente de referencia.
 Outline fallback. Cada stroke como path fino.
 - Cada path con `id="contorno1"`, `id="contorno2"`, ...
 
-#### `generateDottedSvg(dotList, width, height, dotRadius = 6)` (**FIRMA NUEVA**)
-**Ojo**: la firma cambio. Antes tomaba `strokePaths: Array<{ id, d }>` y emitia paths con `stroke-dasharray`. Ahora toma **el `dotList` completo** y emite un `<circle>` por cada coordenada, agrupado por trazo.
+#### `generateDottedSvg(strokePaths, width, height, strokeWidth = 8)`
+Emite un `<path id="path{i+1}">` dasheado por cada trazo, envueltos en un `<g id="path">`. Es el formato historico que espera el componente consumidor.
 
-- **Input**: `dotList` (array de `{ dragger, coordinates: [{ coords: [x,y], corner? }, ...] }`)
-- **Output**: string SVG. Un `<g id="path{i+1}">` por trazo, conteniendo un `<circle cx cy r fill="#888"/>` por coordenada.
+- **Input**: `strokePaths: Array<{ id?, d }>` (producido por `ManualPathDrawer.handleFinalize`: `smooth(pts, 2)` → `M x,y L x,y ...`)
+- **Output**: string SVG. `<g><g><g id="path">` envolviendo `<path id="path1" d="..." style="fill:none;stroke:#ccc;stroke-width:{N}px;stroke-linecap:round;stroke-dasharray:0.1,16;"/>` por trazo.
+- `strokeWidth` tipicamente se pasa como el `animationPathStroke` efectivo para que el grosor del trazo animado coincida con el estilo punteado.
 
-Los `id`s de los grupos siguen siendo `path1`, `path2`, ... y concuerdan con los selectores de `letterAnimationPath`.
+Los ids `path1`, `path2`, ... concuerdan con los selectores de `letterAnimationPath` en el `data.json`.
 
 ---
 

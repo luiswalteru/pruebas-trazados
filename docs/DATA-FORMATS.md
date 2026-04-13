@@ -150,30 +150,27 @@ SVG con el contorno de la letra. Se muestra como guia visual de fondo mientras e
 
 ### letter-dotted.svg
 
-**Formato actual (abril 2026)**: Un `<circle>` por coordenada muestreada, agrupados por trazo. **Ya no son `<path>` con `stroke-dasharray`**.
+Un `<path>` con `stroke-dasharray` por trazo, envuelto en `<g id="path">`. Es el formato que espera el componente educativo consumidor.
 
 ```xml
 <svg width="100%" height="100%" viewBox="0 0 380 340" ...>
-  <g><g>
-    <g id="path1">
-      <circle cx="190" cy="85" r="8" fill="#888"/>
-      <circle cx="185.12" cy="90.45" r="8" fill="#888"/>
-      ...
-    </g>
-    <g id="path2">
-      <circle cx="100" cy="270" r="8" fill="#888"/>
-      ...
-    </g>
-  </g></g>
+  <g><g><g id="path">
+    <path id="path1" d="M190,85L185.12,90.45L..."
+      style="fill:none;stroke:#ccc;stroke-width:16px;stroke-linecap:round;stroke-dasharray:0.1,16;"/>
+    <path id="path2" d="M100,270L..."
+      style="fill:none;stroke:#ccc;stroke-width:16px;stroke-linecap:round;stroke-dasharray:0.1,16;"/>
+  </g></g></g>
 </svg>
 ```
 
 **Contrato con el componente consumidor**:
-- Cada trazo es un `<g id="path{i+1}">` cuyas coordenadas coinciden 1:1 con `data.json.dotList[i].coordinates`.
-- Los selectores en `letterAnimationPath` (`#path1`, `#path2`, ...) apuntan a esos `<g>`.
-- El radio de los circulos se calcula como `max(4, round(dotSize / 4))`.
+- Un `<path id="path{i+1}">` por trazo, dentro del wrapper `<g id="path">`.
+- `d` viene de `strokePaths[i].d` (construido por `ManualPathDrawer` como `M x,y L x,y ...` sobre los puntos suavizados con `smooth(_, 2)`, antes del resample).
+- Los selectores en `letterAnimationPath` (`#path1`, `#path2`, ...) apuntan a los `<path>` individuales.
+- `stroke-width` = `animationPathStroke` del `data.json` (el `GeneratorPage` lo pasa como 4º argumento a `generateDottedSvg`).
+- `stroke-dasharray: 0.1,16` es la clave del efecto punteado: el `0.1` produce un "dot" redondeado gracias a `stroke-linecap: round`, separados 16 px.
 
-El bundle de referencia `ejemplo/trazado-letra-a/letter-dotted.svg` usa el formato **antiguo** (path dasheado). Si el componente consumidor dependia de ese formato, hay que actualizarlo o cambiar `generateDottedSvg` para emitirlo de vuelta.
+El bundle de referencia `ejemplo/trazado-letra-a/letter-dotted.svg` usa una variante distinta (paths rellenos con shapes cerradas `<path ... fill:#cecece>`), pero **el formato actual con `stroke-dasharray` es el contrato acordado con el componente consumidor**.
 
 ### Formato SVG comun
 

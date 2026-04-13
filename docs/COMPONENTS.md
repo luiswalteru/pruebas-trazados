@@ -52,7 +52,7 @@ Unico path de generacion (ya no hay branches font/svg/manual):
 2. Usa `canvasWidth` / `canvasHeight` tal cual
 3. Calcula `effDotSize` / `effStroke` via override 0/>0 + `computeLetterParams`
 4. `getRefSvgs(letter)` — fill/outline desde la fuente si hay, fallback a `generateFillSvgFromStrokes` / `generateOutlineSvgFromStrokes` si no
-5. `generateDottedSvg(dotList, w, h, max(4, round(effDotSize/4)))` — circulos por coordenada
+5. `generateDottedSvg(strokePaths, w, h, effStroke)` — paths dasheados con `stroke-width = animationPathStroke`
 6. `animationPaths`: por cada stroke, `{ length: coordinates.length, time: max(2, round(length/4)) }`
 7. Construye `data.json` via `generateDataJson`
 

@@ -55,9 +55,8 @@ Si el componente consumidor espera `"ny"` / `"UpperNy"` en el campo `letter`, ha
 ### 5. Ajustes del contrato con el componente consumidor
 **Prioridad: Media**
 
-El cambio de formato de `letter-dotted.svg` (de paths dasheados a `<circle>`s por coordenada) requiere confirmar que:
-- [ ] El componente educativo (`lecto_pruebas_2026`) acepta este nuevo formato
-- [ ] O, si no, `generateDottedSvg` puede emitir el formato antiguo reconstruyendo paths desde `strokePaths`
+Resuelto para `letter-dotted.svg`: se revirtio a paths dasheados (`stroke-dasharray: 0.1,16`) con el wrapper `<g id="path">`, que es el contrato que espera el componente educativo. Pendiente:
+- [ ] Validar que el `stroke-width` que se emite (= `animationPathStroke` efectivo) produce el tamaño de punto esperado. Si no, ajustar el argumento que pasa `GeneratorPage.generateForLetter` a `generateDottedSvg`.
 
 ### 6. Mejoras de UX (baja)
 - [ ] Indicador de progreso durante generacion masiva

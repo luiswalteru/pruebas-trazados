@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -oE 'style=\"[^\"]{0,500}\"' /Users/luis/Desktop/Oneclick/Edelvives/Infantil2026/pruebas-trazados/ejemplo/trazado-letra-a/letter-dotted.svg)",
+      "Bash(python3:*)"
+    ]
+  }
+}
