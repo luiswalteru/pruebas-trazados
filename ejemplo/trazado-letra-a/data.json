@@ -1,0 +1,87 @@
+{
+  "activityId": "trazados",
+  "sectionId": "trazados",
+  "title": {
+    "es": "Trazado de la letra «a».",
+    "val": "Trazado de la letra «a».",
+    "audio": {
+      "es": "audio/es/title",
+      "val": "audio/val/title"
+    }
+  },
+  "character": "character.png",
+  "letterFill": "letter-fill.svg",
+  "letterOutline": "letter-outline.svg",
+  "letterDotted": "letter-dotted.svg",
+  "letter": "a",
+  "letterSize": [380, 340],
+  "animationPathStroke": 16,
+  "letterAnimationPath": [
+    {
+      "selector": "#path1",
+      "time": 16
+    }
+  ],
+  "dotSize": 33,
+  "playButtonPosition": [-20, 30],
+  "dotList": [
+    {
+      "dragger": [
+        31,
+        148
+      ],
+      "coordinates": [
+        {"coords": [40.944, 160.184]},
+        {"coords": [49.875, 135.683]},
+        {"coords": [62.993, 112.995]},
+        {"coords": [80.483, 97.018]},
+        {"coords": [100.26, 85.32]},
+        {"coords": [122.461, 78.973]},
+        {"coords": [146.478, 77.683]},
+        {"coords": [171.987, 86.489]},
+        {"coords": [192.966, 99.002], "corner": true},
+        {"coords": [178.304, 89.228]},
+        {"coords": [152.596, 80.127]},
+        {"coords": [127.641, 77.521]},
+        {"coords": [101.638, 84.571]},
+        {"coords": [80.991, 96.417]},
+        {"coords": [62.887, 113.544]},
+        {"coords": [49.818, 134.298]},
+        {"coords": [41.735, 158.226]},
+        {"coords": [39.717, 182.001]},
+        {"coords": [42.222, 205.827]},
+        {"coords": [51.938, 226.323]},
+        {"coords": [69.834, 244.668]},
+        {"coords": [91.564, 256.453]},
+        {"coords": [117.506, 262.546]},
+        {"coords": [143.527, 260.242]},
+        {"coords": [166.09, 251.939]},
+        {"coords": [185.134, 238.16]},
+        {"coords": [202.694, 221.061]},
+        {"coords": [215.981, 203.529]},
+        {"coords": [221.811, 185.317]},
+        {"coords": [222.718, 163.259]},
+        {"coords": [222.718, 145.18]},
+        {"coords": [222.718, 124.251]},
+        {"coords": [222.718, 105.107]},
+        {"coords": [222.718, 88.239]},
+        {"coords": [222.718, 102.901]},
+        {"coords": [222.718, 122.563]},
+        {"coords": [222.718, 141.314]},
+        {"coords": [222.718, 158.888]},
+        {"coords": [222.718, 177.823]},
+        {"coords": [222.718, 197.657]},
+        {"coords": [222.718, 215.903]},
+        {"coords": [224.347, 232.125]},
+        {"coords": [230.289, 248.416]},
+        {"coords": [246.186, 260.72]},
+        {"coords": [267.556, 262.364]},
+        {"coords": [286.336, 252.535]},
+        {"coords": [300.489, 237.522]},
+        {"coords": [310.834, 220.113]},
+        {"coords": [322.242, 201.547]},
+        {"coords": [333.314, 180.975]}
+      ]
+    }
+  ]
+}
