@@ -21,11 +21,10 @@ Componente principal del wizard de generacion de trazados. Reducido drasticament
 | `canvasHeight` | number | 340 | Alto del canvas |
 | `strokeWidth` | number | 0 | 0 = auto via `computeLetterParams`, >0 = forzado |
 | `manualDrawings` | object | `{}` | Map letra -> `{ dotList, strokePaths }` |
-| `manualActiveLetter` | string/null | `null` | Letra activa en el drawer |
 | `refFont` | object/null | `null` | Fuente de referencia opcional (guia visual) |
 | `refFontName` | string | `''` | Nombre del archivo de fuente de referencia |
 
-**Ya no existen** (vs version anterior): `mode`, `font`, `fontName`, `importedSvgs`, `audioFiles`, `imageFiles`.
+**Ya no existen** (vs version anterior): `mode`, `font`, `fontName`, `importedSvgs`, `audioFiles`, `imageFiles`, `manualActiveLetter` (se derivo a `activeLetter = selectedLetters[0]` porque solo hay una letra a la vez).
 
 ### Persistencia
 
@@ -43,7 +42,7 @@ Carga la fuente de referencia opcional. Parsea con `parseFont` y guarda en `refF
 Genera `fillSvg`, `outlineSvg` y `fillPathD` para una letra usando la fuente de referencia. Retorna strings vacios si no hay `refFont`. Usado tanto como guia visual en el drawer como para el export final.
 
 #### `handleManualComplete(letter, result)`
-Callback al terminar un dibujo. Guarda `{ dotList, strokePaths }` en `manualDrawings` y auto-avanza a la siguiente letra sin dibujo.
+Callback al terminar un dibujo. Solo guarda `{ dotList, strokePaths }` en `manualDrawings[letter]`. Ya no hay auto-avance: como la seleccion es exclusiva (una letra), no hay "siguiente" a la que saltar.
 
 #### `generateForLetter(letter)` (CRITICO)
 Unico path de generacion (ya no hay branches font/svg/manual):
@@ -69,7 +68,7 @@ Coloca `{ dataJson, fillSvg, outlineSvg, dottedSvg }` en `window.__trazadoPrevie
 
 - **Paso 1 — Inicio**: Texto introductorio + boton "Cargar fuente de referencia (opcional)" + "Siguiente". **Sin selector de modo**.
 - **Paso 2 — Letras**: Toggle ligada/mayusculas + grid de letras (seleccion exclusiva — una sola). Contador indica la letra activa.
-- **Paso 3 — Configurar y generar**: Inputs (canvas w/h, dotCount, dotSize, strokeWidth). Pestañas por letra seleccionada + `ManualPathDrawer` activo. Boton "Generar N trazado(s)".
+- **Paso 3 — Configurar y generar**: Inputs (canvas w/h, dotCount, dotSize, strokeWidth). El `ManualPathDrawer` aparece directamente con la letra seleccionada en Step 2 — no hay tabs porque solo se dibuja una letra a la vez. Un tick ✓ en el titulo indica si esa letra ya tiene un trazado guardado. Boton "Generar".
 - **Paso 4 — Assets y exportacion**: Lista de trazados generados con valores computados (canvas, dotSize, stroke, trazos, puntos por trazo). Botones `Preview` / `Exportar` por item + `Exportar todos como ZIP` global. **Ya no hay uploads** de audio/imagen.
 
 ---

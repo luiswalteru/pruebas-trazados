@@ -79,7 +79,7 @@ trazados-generator/
 - `dotSize` — tamaño visual del punto. `0` = auto via `computeLetterParams`. `>0` = forzado
 - `animationPathStroke` — grosor del trazo. `0` = auto via `computeLetterParams`. `>0` = forzado
 
-Bajo la config aparecen pestañas por letra + el `ManualPathDrawer`. Se dibuja el recorrido de cada trazo con el cursor. Al guardar una letra (Enter), se auto-avanza a la siguiente sin dibujo. Boton "Generar" exporta los datos al estado y avanza al paso 4.
+Bajo la config aparece directamente el `ManualPathDrawer` con la letra elegida en Step 2 (como solo se permite una letra a la vez, no hay tabs ni selector). Se dibuja el recorrido de cada trazo con el cursor; un tick ✓ junto al titulo indica que ya hay un trazado guardado para esa letra. Boton "Generar" pasa al paso 4.
 
 **Paso 4: Assets y exportacion** - Lista de trazados generados mostrando valores computados por letra (canvas, dotSize, stroke, cantidad de trazos, puntos por trazo). Botones: `Preview` (navega a `/preview`), `Exportar` (ZIP individual), `Exportar todos como ZIP` (ZIP masivo). No hay uploads de assets — `thum.png` se genera automaticamente y ya no se incluyen `character.png`, `fondo.png` ni audios.
 
