@@ -51,7 +51,7 @@ Unico path de generacion (ya no hay branches font/svg/manual):
 2. Usa `canvasWidth` / `canvasHeight` tal cual
 3. Calcula `effDotSize` / `effStroke` via override 0/>0 + `computeLetterParams`
 4. `getRefSvgs(letter)` — fill/outline desde la fuente si hay, fallback a `generateFillSvgFromStrokes` / `generateOutlineSvgFromStrokes` si no
-5. `generateDottedSvg(strokePaths, w, h, effStroke)` — paths dasheados con `stroke-width = animationPathStroke`
+5. `generateDottedSvg(strokePaths, w, h)` — paths dasheados con defaults (`stroke-width: 5`, `stroke-dasharray: 7,11`) que reproducen el visual del bundle de referencia (rayas capsuladas de ~12×5 px, periodo 18). No se usa `animationPathStroke` aqui — ese solo alimenta el `data.json` para la animacion del consumidor
 6. `animationPaths`: por cada stroke, `{ length: coordinates.length, time: max(2, round(length/4)) }`
 7. Construye `data.json` via `generateDataJson`
 

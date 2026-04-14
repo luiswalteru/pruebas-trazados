@@ -150,27 +150,31 @@ SVG con el contorno de la letra. Se muestra como guia visual de fondo mientras e
 
 ### letter-dotted.svg
 
-Un `<path>` con `stroke-dasharray` por trazo, envuelto en `<g id="path">`. Es el formato que espera el componente educativo consumidor.
+Un `<path>` con `stroke-dasharray` por trazo, envuelto en `<g id="path">`. Emite **rayas (lineas dashed), no puntos**, para reproducir el visual del bundle de referencia `ejemplo/trazado-letra-a/letter-dotted.svg` (capsulas de ~12×5 px orientadas a lo largo del trazo, periodo 18 px).
 
 ```xml
 <svg width="100%" height="100%" viewBox="0 0 380 340" ...>
   <g><g><g id="path">
     <path id="path1" d="M190,85L185.12,90.45L..."
-      style="fill:none;stroke:#ccc;stroke-width:16px;stroke-linecap:round;stroke-dasharray:0.1,16;"/>
+      style="fill:none;stroke:#ccc;stroke-width:5px;stroke-linecap:round;stroke-dasharray:7,11;"/>
     <path id="path2" d="M100,270L..."
-      style="fill:none;stroke:#ccc;stroke-width:16px;stroke-linecap:round;stroke-dasharray:0.1,16;"/>
+      style="fill:none;stroke:#ccc;stroke-width:5px;stroke-linecap:round;stroke-dasharray:7,11;"/>
   </g></g></g>
 </svg>
 ```
 
 **Contrato con el componente consumidor**:
 - Un `<path id="path{i+1}">` por trazo, dentro del wrapper `<g id="path">`.
-- `d` viene de `strokePaths[i].d` (construido por `ManualPathDrawer` como `M x,y L x,y ...` sobre los puntos suavizados con `smooth(_, 2)`, antes del resample).
+- `d` viene de `strokePaths[i].d` (construido por `ManualPathDrawer.handleFinalize` como `M x,y L x,y ...` sobre los puntos suavizados con `smooth(_, 2)`, antes del resample).
 - Los selectores en `letterAnimationPath` (`#path1`, `#path2`, ...) apuntan a los `<path>` individuales.
-- `stroke-width` = `animationPathStroke` del `data.json` (el `GeneratorPage` lo pasa como 4º argumento a `generateDottedSvg`).
-- `stroke-dasharray: 0.1,16` es la clave del efecto punteado: el `0.1` produce un "dot" redondeado gracias a `stroke-linecap: round`, separados 16 px.
 
-El bundle de referencia `ejemplo/trazado-letra-a/letter-dotted.svg` usa una variante distinta (paths rellenos con shapes cerradas `<path ... fill:#cecece>`), pero **el formato actual con `stroke-dasharray` es el contrato acordado con el componente consumidor**.
+**Parametros del dashing** (por defecto en `generateDottedSvg`, configurables via 4º/5º argumento):
+- `stroke-width: 5px` — espesor de la raya, match con la altura del capsule en el bundle de referencia
+- `stroke-dasharray: 7,11` — dash 7 + gap 11 en numeros raw. Con `stroke-linecap: round` y `stroke-width: 5`, los caps redondeados extienden el dash visible: `visible_dash = 7 + 5 = 12`, `visible_gap = 11 - 5 = 6`. Periodo total 18, que coincide con el del bundle de referencia.
+- `stroke: #ccc` — gris claro
+- `stroke-linecap: round` — caps redondeados que forman las capsulas
+
+> **Nota**: el bundle `ejemplo/trazado-letra-a/letter-dotted.svg` alcanza el mismo visual con **paths rellenos** (18 sub-shapes cerrados por trazo con `fill:#cecece`) en lugar de dashing. Nuestro generador produce un SVG mas compacto via `stroke-dasharray` con el mismo aspecto final (el componente consumidor renderiza igual ambos, porque el dashing de SVG es equivalente en pantalla a esas capsulas cerradas).
 
 ### Formato SVG comun
 

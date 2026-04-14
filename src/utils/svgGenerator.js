@@ -52,26 +52,40 @@ export function generateOutlineSvgFromStrokes(strokePaths, width, height, border
 }
 
 /**
- * Dotted SVG: renders each stroke as a dashed path along the stroke's "d"
- * string, producing the dotted-line appearance the downstream player expects.
+ * Dotted SVG: renders each stroke as a dashed path (actual dashes, not round
+ * dots), matching the visual of the historical lecto_pruebas_2026 bundles.
  *
- * Shape of the output (matches the historical lecto_pruebas_2026 format):
+ * The reference bundle ejemplo/trazado-letra-a/letter-dotted.svg uses capsule
+ * shapes of roughly 12×5 px oriented along each stroke with a period of 18
+ * px. We reproduce that with `stroke-dasharray` + rounded linecaps:
+ *
+ *   dasharray 7,11  →  visible dash 12  +  visible gap 6  (period 18)
+ *   stroke-width 5  →  thickness 5 px matching the capsule height
+ *
+ * Shape of the output:
  *   <g><g><g id="path">
- *     <path id="path1" d="..." style="fill:none;stroke:#ccc;...stroke-dasharray:0.1,16;"/>
+ *     <path id="path1" d="..." style="fill:none;stroke:#ccc;...stroke-dasharray:7,11;"/>
  *     <path id="path2" .../>
  *   </g></g></g>
  *
- * The selectors `#path1`, `#path2`, … in data.json.letterAnimationPath target
- * the individual <path> elements (not the wrapper <g id="path">).
+ * Selectors in `data.json.letterAnimationPath` (`#path1`, `#path2`, …) target
+ * the individual <path> elements (not the wrapper `<g id="path">`).
  *
  * @param {Array<{ id?: string, d: string }>} strokePaths  one entry per stroke
  * @param {number} width
  * @param {number} height
- * @param {number} strokeWidth  stroke thickness in px (default 8, the historical value)
+ * @param {number} strokeWidth  dash thickness in px (default 5)
+ * @param {string} dashArray    SVG dasharray string (default "7,11" → 12+6 visible with round caps)
  */
-export function generateDottedSvg(strokePaths, width, height, strokeWidth = 8) {
+export function generateDottedSvg(
+  strokePaths,
+  width,
+  height,
+  strokeWidth = 5,
+  dashArray = '7,11',
+) {
   const paths = (strokePaths || []).map((p, i) =>
-    `<path id="path${i + 1}" d="${p.d}" style="fill:none;stroke:#ccc;stroke-width:${strokeWidth}px;stroke-linecap:round;stroke-dasharray:0.1,16;"/>`
+    `<path id="path${i + 1}" d="${p.d}" style="fill:none;stroke:#ccc;stroke-width:${strokeWidth}px;stroke-linecap:round;stroke-dasharray:${dashArray};"/>`
   ).join('\n      ');
 
   return `<?xml version="1.0" encoding="UTF-8" standalone="no"?>

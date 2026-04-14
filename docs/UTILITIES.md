@@ -68,12 +68,17 @@ Outline SVG a partir del path de la fuente de referencia.
 Outline fallback. Cada stroke como path fino.
 - Cada path con `id="contorno1"`, `id="contorno2"`, ...
 
-#### `generateDottedSvg(strokePaths, width, height, strokeWidth = 8)`
-Emite un `<path id="path{i+1}">` dasheado por cada trazo, envueltos en un `<g id="path">`. Es el formato historico que espera el componente consumidor.
+#### `generateDottedSvg(strokePaths, width, height, strokeWidth = 5, dashArray = '7,11')`
+Emite un `<path id="path{i+1}">` dasheado por cada trazo, envueltos en un `<g id="path">`. Emite **rayas reales** (no puntos redondos), reproduciendo el visual del bundle de referencia.
 
 - **Input**: `strokePaths: Array<{ id?, d }>` (producido por `ManualPathDrawer.handleFinalize`: `smooth(pts, 2)` → `M x,y L x,y ...`)
-- **Output**: string SVG. `<g><g><g id="path">` envolviendo `<path id="path1" d="..." style="fill:none;stroke:#ccc;stroke-width:{N}px;stroke-linecap:round;stroke-dasharray:0.1,16;"/>` por trazo.
-- `strokeWidth` tipicamente se pasa como el `animationPathStroke` efectivo para que el grosor del trazo animado coincida con el estilo punteado.
+- **Output**: string SVG. `<g><g><g id="path">` envolviendo `<path id="path1" d="..." style="fill:none;stroke:#ccc;stroke-width:{N}px;stroke-linecap:round;stroke-dasharray:{D};"/>` por trazo.
+
+**Defaults elegidos para coincidir con `ejemplo/trazado-letra-a/letter-dotted.svg`**:
+- `strokeWidth = 5` (espesor ~5 px del capsule en la referencia)
+- `dashArray = '7,11'` (dash 7 + gap 11, con caps redondeados da visible `12 + 6 = 18` de periodo, matching la referencia)
+
+Si se pasa un `dashArray` muy corto en el primer componente (ej. `'0.1,16'`) el resultado seran puntos redondos en lugar de rayas — mantener el default salvo que se busque otro estilo.
 
 Los ids `path1`, `path2`, ... concuerdan con los selectores de `letterAnimationPath` en el `data.json`.
 

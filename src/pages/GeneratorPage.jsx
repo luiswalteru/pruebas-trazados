@@ -123,10 +123,11 @@ export default function GeneratorPage() {
     const outlineSvg = refSvgs.outlineSvg
       || generateOutlineSvgFromStrokes(strokePaths, w, h, 3)
 
-    // Letter-dotted.svg: dashed path per stroke (historical format)
-    // stroke-width mirrors animationPathStroke so the dotted look matches the
-    // on-screen animation weight.
-    const dottedSvg = generateDottedSvg(strokePaths, w, h, effStroke)
+    // Letter-dotted.svg: dashed path per stroke. Uses the default stroke-width
+    // (5) and dasharray ("7,11") that reproduce the reference bundle's visual
+    // (capsule-shaped dashes of ~12×5 px, period 18). animationPathStroke is
+    // not used here — that one drives the animated trail on the consumer side.
+    const dottedSvg = generateDottedSvg(strokePaths, w, h)
 
     const animationPaths = strokePaths.map((p, i) => ({
       length: dotList[i]?.coordinates?.length || 40,

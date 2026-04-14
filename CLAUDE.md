@@ -63,17 +63,18 @@ The downstream player expects **dashed paths**, one `<path id="path{i+1}">` per 
 
 ```xml
 <g><g><g id="path">
-  <path id="path1" d="M... L..." style="fill:none;stroke:#ccc;stroke-width:16px;stroke-linecap:round;stroke-dasharray:0.1,16;"/>
+  <path id="path1" d="M... L..." style="fill:none;stroke:#ccc;stroke-width:5px;stroke-linecap:round;stroke-dasharray:7,11;"/>
   <path id="path2" .../>
 </g></g></g>
 ```
 
-- `stroke-dasharray: 0.1,16` + `stroke-linecap: round` is what produces the dotted look — `0.1` becomes a round cap (a "dot") and `16` is the gap in px.
-- `stroke-width` is passed as the effective `animationPathStroke` so the dots match the animation weight.
 - The `d` values come from `ManualPathDrawer.handleFinalize`'s `strokePaths` output — simple `M + L` paths built from smoothed stroke points.
 - `letterAnimationPath[i].selector` (`#path1`, `#path2`, …) targets the individual `<path>` elements inside the wrapper.
+- **The dashing must render as actual dashes, not round dots.** The reference bundle (`ejemplo/trazado-letra-a/letter-dotted.svg`) uses capsule-shaped dashes of ~12×5 px with period 18. We reproduce that with `stroke-width: 5` + `stroke-dasharray: 7,11` + `stroke-linecap: round` — the round caps extend the 7-unit dash into a visible 12-unit capsule and shrink the 11-unit gap into a 6-unit visible gap (period 18, matching the reference).
+- Do **not** set the dash length to `0.1` — that renders as round dots, which is the wrong visual. Any dash ≥ ~5 with round caps produces proper dashes.
+- `animationPathStroke` from `data.json` is **not** reused for this stroke-width. That value drives the animated trail on the consumer side; the dashed guide has its own fixed thickness.
 
-`generateDottedSvg`'s signature is `(strokePaths, width, height, strokeWidth = 8)`. Do not pass `dotList` — during the brief circles-per-coord experiment the signature and format diverged; both have been reverted.
+`generateDottedSvg`'s signature is `(strokePaths, width, height, strokeWidth = 5, dashArray = '7,11')`. `GeneratorPage` just passes the first three and relies on the defaults.
 
 ### Export
 
