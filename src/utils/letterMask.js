@@ -112,6 +112,71 @@ function findNearestInside(maskInfo, x, y, maxRadius) {
 }
 
 /**
+ * Post-process centering pass for a finished stroke.
+ *
+ * Intended to run AFTER the user has drawn the full stroke (or all strokes of
+ * a letter) to remove hand-tremor wobble and pull the trajectory onto the
+ * letter's medial axis. The pipeline is:
+ *
+ *   1. Heavy Gaussian-like smoothing (25/50/25 neighbours, N iterations) to
+ *      erase high-frequency tremor. Endpoints are preserved.
+ *   2. Iterative aggressive snapToCenterline — same radial pull as the
+ *      realtime drawer, but with a bigger maxStep and repeated several times
+ *      so the whole stroke relaxes onto the skeleton.
+ *   3. Light smoothing to recover C1 continuity after the discrete snaps.
+ *
+ * If `maskInfo` is null (no reference font loaded) the function still does
+ * pre/post smoothing but skips the snap step. That lets the button work as a
+ * "heavy smooth" even without a mask.
+ *
+ * @param {Array<{x,y}>} points
+ * @param {Object|null}  maskInfo       result of buildLetterMask, or null
+ * @param {Object}       opts
+ */
+export function centerStrokePoints(points, maskInfo, opts = {}) {
+  if (!points || points.length < 3) return points || [];
+
+  const preSmoothIterations  = opts.preSmoothIterations  ?? 8;
+  const snapIterations       = opts.snapIterations       ?? 12;
+  const snapPullStrength     = opts.snapPullStrength     ?? 2.5;
+  const snapMaxStep          = opts.snapMaxStep          ?? 5;
+  const snapPullRadius       = opts.snapPullRadius       ?? 60;
+  const postSmoothIterations = opts.postSmoothIterations ?? 2;
+
+  let pts = smoothPoints(points, preSmoothIterations);
+
+  if (maskInfo) {
+    const snapOpts = {
+      pullStrength: snapPullStrength,
+      maxStep: snapMaxStep,
+      pullRadius: snapPullRadius,
+    };
+    for (let i = 0; i < snapIterations; i++) {
+      pts = pts.map(p => snapToCenterline(p, maskInfo, snapOpts));
+    }
+  }
+
+  return smoothPoints(pts, postSmoothIterations);
+}
+
+function smoothPoints(points, iterations) {
+  if (iterations <= 0 || points.length < 3) return points.map(p => ({ x: p.x, y: p.y }));
+  let pts = points.map(p => ({ x: p.x, y: p.y }));
+  for (let iter = 0; iter < iterations; iter++) {
+    const next = [pts[0]];
+    for (let j = 1; j < pts.length - 1; j++) {
+      next.push({
+        x: pts[j - 1].x * 0.25 + pts[j].x * 0.5 + pts[j + 1].x * 0.25,
+        y: pts[j - 1].y * 0.25 + pts[j].y * 0.5 + pts[j + 1].y * 0.25,
+      });
+    }
+    next.push(pts[pts.length - 1]);
+    pts = next;
+  }
+  return pts;
+}
+
+/**
  * Pull a point gently toward the letter's medial axis (skeleton).
  *
  * Uses the gradient of the distance transform: inside a shape, the gradient

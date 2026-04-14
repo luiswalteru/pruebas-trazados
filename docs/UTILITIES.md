@@ -18,6 +18,17 @@ Construye la mascara y el campo de distancia.
 - **Output**: `{ mask: Uint8Array, dist: Float32Array, width, height }` o `null` si falta algun input
 - **Proceso**: carga el SVG como imagen -> dibuja en canvas -> convierte a mascara binaria (`alpha > 32 = 1`) -> calcula distance transform (chamfer 3-4) con dos pasadas (forward + backward)
 
+#### `centerStrokePoints(points, maskInfo, opts = {})`
+Pasada de post-proceso sobre un trazo completo. Se llama **despues** de que el usuario dibujo todos los trazos para corregir temblores y centrar la trayectoria en el eje medial de la letra. Pipeline:
+
+1. Suavizado pesado (25/50/25, `preSmoothIterations = 8`) conservando extremos — quita tembleque de alta frecuencia
+2. `snapIterations = 12` iteraciones agresivas de `snapToCenterline` con `maxStep = 5` y `pullStrength = 2.5` sobre **todos los puntos** del trazo
+3. Suavizado ligero (`postSmoothIterations = 2`) para restaurar continuidad C1 despues de los snaps discretos
+
+Si `maskInfo` es `null` (no se cargo fuente de referencia) se salta el paso 2 y la funcion opera solo como "super-suavizado".
+
+Expuesta a la UI via el boton "Centrar trazado" en `ManualPathDrawer`.
+
 #### `snapToCenterline(point, maskInfo, opts = {})`
 Empuja suavemente un punto hacia el eje medial de la letra usando el **gradiente del campo de distancia** (que dentro de la forma apunta hacia el esqueleto — magnitud ~0 en el centro).
 

@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { buildLetterMask, snapToCenterline } from '../utils/letterMask'
+import { buildLetterMask, snapToCenterline, centerStrokePoints } from '../utils/letterMask'
 
 /**
  * ManualPathDrawer
@@ -198,6 +198,23 @@ export default function ManualPathDrawer({
     setIsDrawing(false)
   }, [])
 
+  // ---- Center finished strokes on the letter body ---------------------------
+  // Runs after the user has drawn all strokes. Applies a heavy post-process
+  // pass (smooth → iterative snap-to-centerline → smooth) to remove tremor
+  // and pull each stroke onto the letter's medial axis. Replaces `strokes`
+  // in place so the result is visible on the canvas before saving.
+  const centerStrokes = useCallback(() => {
+    // Commit any in-progress stroke first so it's included.
+    let allStrokes = [...strokes]
+    if (currentStroke.length >= 2) allStrokes.push(currentStroke)
+    if (allStrokes.length === 0) return
+
+    const centered = allStrokes.map(s => centerStrokePoints(s, maskRef.current))
+    setStrokes(centered)
+    setCurrentStroke([])
+    setIsDrawing(false)
+  }, [strokes, currentStroke])
+
   // ---- Finalize → resample & emit dotList -----------------------------------
   const handleFinalize = useCallback(() => {
     if (strokes.length === 0 && currentStroke.length < 2) return
@@ -259,6 +276,16 @@ export default function ManualPathDrawer({
           </button>
           <button className="btn btn-sm" onClick={clearAll} disabled={strokes.length === 0 && currentStroke.length === 0}>
             Limpiar (Esc)
+          </button>
+          <button
+            className="btn btn-sm"
+            onClick={centerStrokes}
+            disabled={(strokes.length === 0 && currentStroke.length < 2) || !fillSvg}
+            title={!fillSvg
+              ? 'Requiere cargar una fuente de referencia en el paso 1'
+              : 'Suaviza temblores y centra el trazado en el cuerpo de la letra'}
+          >
+            Centrar trazado
           </button>
           <button className="btn btn-sm btn-primary" onClick={handleFinalize}
             disabled={strokes.length === 0 && currentStroke.length < 2}

@@ -126,6 +126,13 @@ Esto se hace **en tiempo real mientras el usuario dibuja** — los puntos que se
 | `Enter` | Finalizar y guardar |
 | `Escape` | Limpiar todo |
 
+### Botones del header
+
+- **Deshacer (Ctrl+Z)**: quita el ultimo trazo completado
+- **Limpiar (Esc)**: borra todos los trazos
+- **Centrar trazado**: post-proceso que corrige temblores y centra los trazos en el eje medial de la letra via `centerStrokePoints`. **Requiere fuente de referencia cargada** en el paso 1 (sin mascara no hay a donde centrar); en ese caso el boton se deshabilita con tooltip explicativo. Reemplaza `strokes` in-place para que el resultado sea visible antes de guardar. Tipicamente se usa una vez dibujados todos los trazos, justo antes de Guardar
+- **Guardar (Enter)**: dispara `handleFinalize`
+
 ### Visualizacion
 
 - Canvas con borde que cambia de color al dibujar (gris -> naranja)
