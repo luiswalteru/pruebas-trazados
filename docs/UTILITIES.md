@@ -84,22 +84,20 @@ Los ids `path1`, `path2`, ... concuerdan con los selectores de `letterAnimationP
 
 ---
 
-## thumGenerator.js (NUEVO)
+## thumGenerator.js
 
-Rasteriza el fill de la letra + los puntos del trazado a una PNG (`thum.png`), que se empaqueta automaticamente en el ZIP exportado.
+Genera `thum.png` componiendo los SVGs existentes del trazado (fill + dotted).
 
 ### Funciones exportadas
 
-#### `async generateThumPngBlob({ fillPathD, strokePaths, dotList, width, height, dotRadius, fallbackStrokeWidth })`
+#### `async generateThumPngBlob({ fillSvg, dottedSvg, width, height })`
 - **Input**:
-  - `fillPathD`: path `"d"` del glifo de la fuente de referencia (si hay)
-  - `strokePaths`: fallback cuando no hay `fillPathD` — se engruesan (`fallbackStrokeWidth`, default 40) para formar silueta
-  - `dotList`: lista de trazos, se dibuja un circulo magenta (`#e91e63`) en cada `coords`
-  - `width`, `height`: tamaño de salida (typicamente `letterSize` del data.json)
-  - `dotRadius`: radio de los circulos (default 6)
+  - `fillSvg`: string SVG completo de `letter-fill.svg` (capa base — la letra rellena en negro)
+  - `dottedSvg`: string SVG completo de `letter-dotted.svg` (capa superior — rayas dasheadas en `#ccc`)
+  - `width`, `height`: tamaño del canvas de salida (tipicamente `letterSize` del `data.json`)
 - **Output**: `Blob` PNG
 
-**Proceso**: construye un SVG en memoria con fill + circles -> lo carga en un `<img>` -> dibuja en un `<canvas>` del tamaño objetivo -> exporta a blob PNG via `canvas.toBlob`.
+**Proceso**: rasteriza `fillSvg` como imagen en un `<canvas>` → dibuja `dottedSvg` encima → exporta via `canvas.toBlob`. El resultado es la letra oscura con rayas claras superpuestas (efecto "carretera con linea central"), identico al `thum.png` del bundle de referencia.
 
 ---
 

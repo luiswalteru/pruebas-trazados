@@ -186,14 +186,11 @@ Todos los SVGs comparten:
 
 ---
 
-## thum.png (nuevo)
+## thum.png
 
-Generado automaticamente por `generateThumPngBlob` en `src/utils/thumGenerator.js` al exportar. Es una rasterizacion PNG de:
+Generado automaticamente por `generateThumPngBlob` en `src/utils/thumGenerator.js` al exportar. Es la **composicion de `letter-fill.svg` + `letter-dotted.svg`**: la letra rellena en negro con las rayas dasheadas gris claro superpuestas (efecto "carretera con linea central", igual que el `thum.png` de referencia en `ejemplo/trazado-letra-a/`).
 
-1. **Capa fill**: el glifo de referencia (si hay fuente) o los trazos del usuario engrosados.
-2. **Capa de dots**: un circulo magenta (`#e91e63`) por cada `coordinates[i].coords` de cada trazo, radio = `max(4, round(dotSize / 4))`.
-
-Tamaño en pixeles = `letterSize` del `data.json`. No configurable desde la UI.
+Proceso: rasteriza `fillSvg` en un `<canvas>` como capa base, luego dibuja `dottedSvg` encima. Exporta a PNG via `canvas.toBlob`. Tamaño en pixeles = `letterSize` del `data.json`.
 
 ---
 

@@ -10,12 +10,10 @@ async function writeTrazadoFiles(folder, trazado) {
 
   const [w, h] = trazado.dataJson?.letterSize || [380, 340];
   const thumBlob = await generateThumPngBlob({
-    fillPathD: trazado.fillPathD,
-    strokePaths: trazado.strokePaths,
-    dotList: trazado.dotList,
+    fillSvg: trazado.fillSvg,
+    dottedSvg: trazado.dottedSvg,
     width: w,
     height: h,
-    dotRadius: Math.max(4, Math.round((trazado.dataJson?.dotSize || 12) / 4)),
   });
   folder.file('thum.png', thumBlob);
 }
