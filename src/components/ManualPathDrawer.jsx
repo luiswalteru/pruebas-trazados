@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { buildLetterMask, snapToCenterline, centerStrokePoints } from '../utils/letterMask'
+import { buildMaskFromImage, snapToCenterline, centerStrokePoints } from '../utils/letterMask'
 
 /**
  * ManualPathDrawer
@@ -22,8 +22,8 @@ import { buildLetterMask, snapToCenterline, centerStrokePoints } from '../utils/
  * Props:
  *   letter        – the letter being drawn (for display)
  *   type          – 'ligada' | 'mayusculas'
- *   fillSvg       – optional SVG string to show as filled guide
- *   outlineSvg    – optional SVG string to show as outline guide
+ *   imageSrc      – optional raster image (dataURL or URL) shown as guide and
+ *                   used to build the binary mask for centerline snapping
  *   width         – canvas width in letter-space units
  *   height        – canvas height in letter-space units
  *   dotCount      – how many dots to resample each stroke to
@@ -34,8 +34,7 @@ import { buildLetterMask, snapToCenterline, centerStrokePoints } from '../utils/
 export default function ManualPathDrawer({
   letter = '',
   type = 'ligada',
-  fillSvg = '',
-  outlineSvg = '',
+  imageSrc = '',
   width = 380,
   height = 340,
   dotCount = 40,
@@ -53,17 +52,17 @@ export default function ManualPathDrawer({
 
   const displayLetter = type === 'mayusculas' ? letter.toUpperCase() : letter.toLowerCase()
 
-  // Build the letter mask when fillSvg changes so drawn points can be snapped
-  // to the centerline of the letter.
+  // Build the letter mask when the reference image changes so drawn points
+  // can be snapped to the centerline of the letter.
   useEffect(() => {
     let cancelled = false
     maskRef.current = null
-    if (!fillSvg) return
-    buildLetterMask(fillSvg, width, height)
+    if (!imageSrc) return
+    buildMaskFromImage(imageSrc, width, height)
       .then(mask => { if (!cancelled) maskRef.current = mask })
       .catch(() => { maskRef.current = null })
     return () => { cancelled = true }
-  }, [fillSvg, width, height])
+  }, [imageSrc, width, height])
 
   // ---- Coordinate conversion ------------------------------------------------
   const toLetterCoords = useCallback((clientX, clientY) => {
@@ -280,9 +279,9 @@ export default function ManualPathDrawer({
           <button
             className="btn btn-sm"
             onClick={centerStrokes}
-            disabled={(strokes.length === 0 && currentStroke.length < 2) || !fillSvg}
-            title={!fillSvg
-              ? 'Requiere cargar una fuente de referencia en el paso 1'
+            disabled={(strokes.length === 0 && currentStroke.length < 2) || !imageSrc}
+            title={!imageSrc
+              ? 'Requiere cargar una imagen de referencia en el paso 1'
               : 'Suaviza temblores y centra el trazado en el cuerpo de la letra'}
           >
             Centrar trazado
@@ -306,7 +305,7 @@ export default function ManualPathDrawer({
         <span><kbd>Ctrl+Z</kbd> deshacer</span>
         <span><kbd>Enter</kbd> guardar</span>
         <span><kbd>Esc</kbd> limpiar</span>
-        {fillSvg && <span style={{ color: '#2e7d32' }}>Auto-centrado activo</span>}
+        {imageSrc && <span style={{ color: '#2e7d32' }}>Auto-centrado activo</span>}
       </div>
 
       {/* Canvas */}
@@ -342,17 +341,20 @@ export default function ManualPathDrawer({
           width, height,
           position: 'relative',
         }}>
-          {/* Letter fill guide (very faint) */}
-          {fillSvg && (
-            <div style={{ position: 'absolute', inset: 0, zIndex: 1, opacity: 0.08 }}
-              dangerouslySetInnerHTML={{ __html: fillSvg }}
-            />
-          )}
-
-          {/* Letter outline guide */}
-          {outlineSvg && (
-            <div style={{ position: 'absolute', inset: 0, zIndex: 2, opacity: 0.2 }}
-              dangerouslySetInnerHTML={{ __html: outlineSvg }}
+          {/* Reference image guide — the user draws over this */}
+          {imageSrc && (
+            <img
+              src={imageSrc}
+              alt=""
+              draggable={false}
+              style={{
+                position: 'absolute', inset: 0, zIndex: 1,
+                width: '100%', height: '100%',
+                objectFit: 'contain',
+                opacity: 0.4,
+                pointerEvents: 'none',
+                userSelect: 'none',
+              }}
             />
           )}
 

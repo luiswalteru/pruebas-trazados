@@ -1,9 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { parseFont, glyphToSvgPathData } from '../utils/fontParser'
 import {
-  generateFillSvg,
-  generateOutlineSvg,
   generateDottedSvg,
   generateFillSvgFromStrokes,
   generateOutlineSvgFromStrokes,
@@ -21,7 +18,7 @@ export default function GeneratorPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
 
-  // Restore step from URL param (?step=4) or persisted state, default 1
+  // Restore step from URL param (?step=N) or persisted state, default 1
   const initialStep = Number(searchParams.get('step')) || _persisted.currentStep || 1
 
   // State
@@ -35,23 +32,29 @@ export default function GeneratorPage() {
   const [canvasWidth, setCanvasWidth] = useState(_persisted.canvasWidth || 380)
   const [canvasHeight, setCanvasHeight] = useState(_persisted.canvasHeight || 340)
   const [strokeWidth, setStrokeWidth] = useState(_persisted.strokeWidth ?? 0)
+  // letter-dotted.svg style controls (match the image's dotted-line look)
+  const [dottedStrokeWidth, setDottedStrokeWidth] = useState(_persisted.dottedStrokeWidth ?? 5)
+  const [dottedDash, setDottedDash] = useState(_persisted.dottedDash ?? 7)
+  const [dottedGap, setDottedGap] = useState(_persisted.dottedGap ?? 11)
 
   // Manual drawing state
   const [manualDrawings, setManualDrawings] = useState(_persisted.manualDrawings || {})  // { letter: { dotList, strokePaths } }
   // The active letter in the drawer is always the single selected letter (only
   // one at a time is allowed), so we derive it from selectedLetters[0].
   const activeLetter = selectedLetters[0] || null
-  // Optional reference font for manual mode (shows letter shape as guide)
-  const [refFont, setRefFont] = useState(_persisted.refFont || null)
-  const [refFontName, setRefFontName] = useState(_persisted.refFontName || '')
-  const refFontInputRef = useRef(null)
+
+  // Per-letter reference images: { [letter]: dataURL }
+  const [images, setImages] = useState(_persisted.images || {})
+  const imageInputRef = useRef(null)
+  const activeImage = activeLetter ? images[activeLetter] : ''
 
   // Persist state on every change so it survives navigation
   useEffect(() => {
     window.__generatorState = {
       type, selectedLetters, generatedTrazados,
       currentStep, dotCount, dotSize, canvasWidth, canvasHeight, strokeWidth,
-      manualDrawings, refFont, refFontName
+      manualDrawings, images,
+      dottedStrokeWidth, dottedDash, dottedGap,
     }
   })
 
@@ -60,33 +63,28 @@ export default function GeneratorPage() {
     setSelectedLetters(prev => (prev[0] === letter ? [] : [letter]))
   }, [])
 
-  // Reference font for manual mode
-  const handleRefFontUpload = useCallback(async (e) => {
+  // Reference image upload for the active letter
+  const handleImageUpload = useCallback((e) => {
     const file = e.target.files[0]
-    if (!file) return
-    try {
-      const buffer = await file.arrayBuffer()
-      const parsed = parseFont(buffer)
-      setRefFont(parsed)
-      setRefFontName(file.name)
-    } catch (err) {
-      alert('Error al cargar fuente de referencia: ' + err.message)
+    if (!file || !activeLetter) return
+    const reader = new FileReader()
+    reader.onload = () => {
+      setImages(prev => ({ ...prev, [activeLetter]: reader.result }))
     }
-  }, [])
+    reader.onerror = () => alert('Error al leer la imagen')
+    reader.readAsDataURL(file)
+    // Reset input so uploading the same file again re-triggers onChange
+    e.target.value = ''
+  }, [activeLetter])
 
-  // Get reference SVGs for a letter (used as guide in manual mode)
-  const getRefSvgs = useCallback((letter) => {
-    if (!refFont) return { fillSvg: '', outlineSvg: '', fillPathD: '' }
-    const char = type === 'mayusculas' ? letter.toUpperCase() : letter.toLowerCase()
-    try {
-      const gd = glyphToSvgPathData(refFont, char, canvasWidth, canvasHeight)
-      return {
-        fillSvg: generateFillSvg(gd.d, canvasWidth, canvasHeight),
-        outlineSvg: generateOutlineSvg(gd.d, canvasWidth, canvasHeight, 3),
-        fillPathD: gd.d,
-      }
-    } catch { return { fillSvg: '', outlineSvg: '', fillPathD: '' } }
-  }, [refFont, type, canvasWidth, canvasHeight])
+  const clearImage = useCallback(() => {
+    if (!activeLetter) return
+    setImages(prev => {
+      const next = { ...prev }
+      delete next[activeLetter]
+      return next
+    })
+  }, [activeLetter])
 
   // Manual drawing complete for the active letter
   const handleManualComplete = useCallback((letter, result) => {
@@ -111,23 +109,22 @@ export default function GeneratorPage() {
 
     const dotList = manual.dotList
     const strokePaths = manual.strokePaths || []
-    const refSvgs = getRefSvgs(letter)
 
-    // Letter-fill.svg: use reference font glyph when available, otherwise
-    // fall back to the thickened user strokes so the shape is non-empty.
+    // letter-fill.svg / letter-outline.svg: always stroke-based — the reference
+    // image is raster-only and we don't vectorize it.
     const fillStrokeWidth = Math.max(20, effDotSize * 1.2)
-    const fillSvg = refSvgs.fillSvg
-      || generateFillSvgFromStrokes(strokePaths, w, h, fillStrokeWidth)
+    const fillSvg = generateFillSvgFromStrokes(strokePaths, w, h, fillStrokeWidth)
+    const outlineSvg = generateOutlineSvgFromStrokes(strokePaths, w, h, 3)
 
-    // Letter-outline.svg: outline of the glyph or outlined user strokes
-    const outlineSvg = refSvgs.outlineSvg
-      || generateOutlineSvgFromStrokes(strokePaths, w, h, 3)
-
-    // Letter-dotted.svg: dashed path per stroke. Uses the default stroke-width
-    // (5) and dasharray ("7,11") that reproduce the reference bundle's visual
-    // (capsule-shaped dashes of ~12×5 px, period 18). animationPathStroke is
-    // not used here — that one drives the animated trail on the consumer side.
-    const dottedSvg = generateDottedSvg(strokePaths, w, h)
+    // Letter-dotted.svg: dashed path per stroke. Uses the user-configured
+    // stroke-width and dasharray so the exported dotted line matches the
+    // style of the reference image. With stroke-linecap:round, the visible
+    // dash = dash + strokeWidth and the visible gap = gap − strokeWidth.
+    const dottedSvg = generateDottedSvg(
+      strokePaths, w, h,
+      dottedStrokeWidth,
+      `${dottedDash},${dottedGap}`,
+    )
 
     const animationPaths = strokePaths.map((p, i) => ({
       length: dotList[i]?.coordinates?.length || 40,
@@ -154,9 +151,8 @@ export default function GeneratorPage() {
       dataJson,
       dotList,
       strokePaths,
-      fillPathD: refSvgs.fillPathD,
     }
-  }, [type, manualDrawings, getRefSvgs, canvasWidth, canvasHeight, dotSize, strokeWidth])
+  }, [type, manualDrawings, canvasWidth, canvasHeight, dotSize, strokeWidth, dottedStrokeWidth, dottedDash, dottedGap])
 
   // Generate all selected
   const handleGenerate = useCallback(async () => {
@@ -174,7 +170,7 @@ export default function GeneratorPage() {
 
     setGeneratedTrazados(results)
     setGenerating(false)
-    setCurrentStep(4)
+    setCurrentStep(3)
   }, [selectedLetters, generateForLetter])
 
   // Export single
@@ -195,7 +191,6 @@ export default function GeneratorPage() {
   const handlePreview = useCallback((letter) => {
     const trazado = generatedTrazados[letter]
     if (!trazado || trazado.error) return
-    // Store in sessionStorage for preview page (using JSON for complex data)
     const previewData = {
       dataJson: trazado.dataJson,
       fillSvg: trazado.fillSvg,
@@ -206,15 +201,19 @@ export default function GeneratorPage() {
     navigate('/preview')
   }, [generatedTrazados, navigate])
 
+  const canAdvanceFromStep1 = !!activeLetter && !!activeImage
+  const canGenerate = !generating
+    && selectedLetters.length > 0
+    && selectedLetters.every(l => manualDrawings[l])
+
   return (
     <div className="generator-page">
       {/* Steps indicator */}
       <div className="steps-bar">
         {[
-          { n: 1, label: 'Inicio' },
-          { n: 2, label: 'Letras' },
-          { n: 3, label: 'Generar' },
-          { n: 4, label: 'Assets & Exportar' },
+          { n: 1, label: 'Imagen' },
+          { n: 2, label: 'Trazado' },
+          { n: 3, label: 'Exportar' },
         ].map(s => (
           <button
             key={s.n}
@@ -227,39 +226,10 @@ export default function GeneratorPage() {
         ))}
       </div>
 
-      {/* Step 1: Manual mode intro & optional reference font */}
+      {/* Step 1: type + letter + image */}
       {currentStep === 1 && (
         <div className="step-content">
-          <h2>Paso 1: Trazado manual</h2>
-
-          <div className="svg-mode-info">
-            <p>Dibujarás el recorrido de cada trazado con el cursor en el paso 3.</p>
-            <p style={{ fontSize: '0.85rem', color: '#888', marginBottom: 12 }}>
-              Carga la fuente de referencia sobre la cual se realizará el trazado.
-            </p>
-            <div style={{ display: 'flex', gap: 10, justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap' }}>
-              <input
-                ref={refFontInputRef}
-                type="file"
-                accept=".ttf,.otf,.woff,.woff2"
-                onChange={handleRefFontUpload}
-                style={{ display: 'none' }}
-              />
-              <button className="btn btn-secondary" onClick={() => refFontInputRef.current?.click()}>
-                {refFontName ? `Referencia: ${refFontName}` : 'Cargar fuente de referencia'}
-              </button>
-              <button className="btn btn-primary" onClick={() => setCurrentStep(2)} disabled={!refFont}>
-                Siguiente →
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Step 2: Type and letter selection */}
-      {currentStep === 2 && (
-        <div className="step-content">
-          <h2>Paso 2: Seleccionar tipo y letras</h2>
+          <h2>Paso 1: Tipo, letra e imagen</h2>
 
           <div className="type-selector">
             <button
@@ -278,8 +248,8 @@ export default function GeneratorPage() {
 
           <div className="letter-controls">
             <span className="letter-count">
-              {selectedLetters[0]
-                ? `Letra seleccionada: ${type === 'mayusculas' ? selectedLetters[0].toUpperCase() : selectedLetters[0]}`
+              {activeLetter
+                ? `Letra seleccionada: ${type === 'mayusculas' ? activeLetter.toUpperCase() : activeLetter}`
                 : 'Ninguna letra seleccionada'}
             </span>
           </div>
@@ -288,23 +258,82 @@ export default function GeneratorPage() {
             {ALL_LETTERS.map(letter => (
               <button
                 key={letter}
-                className={`letter-btn ${selectedLetters.includes(letter) ? 'selected' : ''}`}
+                className={`letter-btn ${selectedLetters.includes(letter) ? 'selected' : ''} ${images[letter] ? 'has-image' : ''}`}
                 onClick={() => toggleLetter(letter)}
+                title={images[letter] ? 'Imagen cargada' : ''}
               >
                 <span className="letter-display">
                   {type === 'mayusculas' ? letter.toUpperCase() : letter}
                 </span>
-                <small className="letter-name">{letter}</small>
+                <small className="letter-name">{letter}{images[letter] ? ' ✓' : ''}</small>
               </button>
             ))}
           </div>
 
-          <div className="step-actions">
-            <button className="btn btn-secondary" onClick={() => setCurrentStep(1)}>← Anterior</button>
+          {/* Image upload for the selected letter */}
+          <div className="image-upload-panel" style={{ marginTop: 24, padding: 16, background: '#f5f5f5', borderRadius: 8 }}>
+            <h3 style={{ marginBottom: 12, fontSize: '1rem' }}>
+              Imagen de referencia
+              {activeLetter && (
+                <span style={{ color: '#f04e23', marginLeft: 8 }}>
+                  — letra {type === 'mayusculas' ? activeLetter.toUpperCase() : activeLetter}
+                </span>
+              )}
+            </h3>
+
+            {!activeLetter && (
+              <p style={{ color: '#888', fontSize: '0.9rem' }}>
+                Selecciona primero una letra para poder cargar su imagen.
+              </p>
+            )}
+
+            {activeLetter && (
+              <>
+                <p style={{ fontSize: '0.85rem', color: '#666', marginBottom: 12 }}>
+                  Carga la imagen (PNG, JPG o JPEG) que contiene la línea punteada
+                  por donde debe ir el trazado. Se usará como guía al dibujar y
+                  para ajustar el trazo al centro de la línea.
+                </p>
+                <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                  <input
+                    ref={imageInputRef}
+                    type="file"
+                    accept=".png,.jpg,.jpeg,image/png,image/jpeg"
+                    onChange={handleImageUpload}
+                    style={{ display: 'none' }}
+                  />
+                  <button className="btn btn-secondary" onClick={() => imageInputRef.current?.click()}>
+                    {activeImage ? 'Reemplazar imagen' : 'Cargar imagen'}
+                  </button>
+                  {activeImage && (
+                    <button className="btn btn-sm" onClick={clearImage}>Quitar imagen</button>
+                  )}
+                  {activeImage && (
+                    <div style={{
+                      width: 160, height: 140,
+                      background: '#fff',
+                      border: '1px solid #ddd',
+                      borderRadius: 6,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      overflow: 'hidden',
+                    }}>
+                      <img
+                        src={activeImage}
+                        alt=""
+                        style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+                      />
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+
+          <div className="step-actions" style={{ marginTop: 24 }}>
             <button
               className="btn btn-primary"
-              onClick={() => setCurrentStep(3)}
-              disabled={selectedLetters.length === 0}
+              onClick={() => setCurrentStep(2)}
+              disabled={!canAdvanceFromStep1}
             >
               Siguiente →
             </button>
@@ -312,10 +341,10 @@ export default function GeneratorPage() {
         </div>
       )}
 
-      {/* Step 3: Configure & Generate */}
-      {currentStep === 3 && (
+      {/* Step 2: Configure & draw & generate */}
+      {currentStep === 2 && (
         <div className="step-content">
-          <h2>Paso 3: Configurar y generar</h2>
+          <h2>Paso 2: Dibujar trazado</h2>
 
           <div className="config-panel">
             <div className="config-group">
@@ -338,9 +367,20 @@ export default function GeneratorPage() {
               <label>Grosor del trazo de animación</label>
               <input type="number" value={strokeWidth} onChange={e => setStrokeWidth(Number(e.target.value))} min={0} max={30} />
             </div>
+            <div className="config-group">
+              <label>Punteado: grosor (px)</label>
+              <input type="number" value={dottedStrokeWidth} onChange={e => setDottedStrokeWidth(Number(e.target.value))} min={1} max={40} />
+            </div>
+            <div className="config-group">
+              <label>Punteado: longitud de dash</label>
+              <input type="number" value={dottedDash} onChange={e => setDottedDash(Number(e.target.value))} min={0} max={80} step="0.1" />
+            </div>
+            <div className="config-group">
+              <label>Punteado: longitud de gap</label>
+              <input type="number" value={dottedGap} onChange={e => setDottedGap(Number(e.target.value))} min={0} max={80} step="0.1" />
+            </div>
           </div>
 
-          {/* -------- Manual drawing interface -------- */}
           {activeLetter && (
             <div style={{ marginBottom: 24 }}>
               <h3>
@@ -351,16 +391,16 @@ export default function GeneratorPage() {
                 {manualDrawings[activeLetter] && ' ✓'}
               </h3>
               <p className="info-text">
-                Haz click y arrastra para cada trazo. Suelta el mouse para terminar un trazo
-                y haz click de nuevo para empezar otro.
+                Haz click y arrastra para cada trazo, siguiendo la línea punteada de la imagen.
+                Suelta el mouse para terminar un trazo y haz click de nuevo para empezar otro.
+                El orden en que dibujes define la secuencia de los trazados.
               </p>
 
               <ManualPathDrawer
                 key={activeLetter}
                 letter={activeLetter}
                 type={type}
-                fillSvg={getRefSvgs(activeLetter).fillSvg}
-                outlineSvg={getRefSvgs(activeLetter).outlineSvg}
+                imageSrc={activeImage}
                 width={canvasWidth}
                 height={canvasHeight}
                 dotCount={dotCount}
@@ -371,22 +411,22 @@ export default function GeneratorPage() {
           )}
 
           <div className="generate-actions">
-            <button className="btn btn-secondary" onClick={() => setCurrentStep(2)}>← Anterior</button>
+            <button className="btn btn-secondary" onClick={() => setCurrentStep(1)}>← Anterior</button>
             <button
               className="btn btn-primary btn-lg"
               onClick={handleGenerate}
-              disabled={generating || selectedLetters.length === 0 || Object.keys(manualDrawings).length === 0}
+              disabled={!canGenerate}
             >
-              {generating ? 'Generando...' : `Generar ${selectedLetters.length} trazado(s)`}
+              {generating ? 'Generando...' : `Generar y continuar`}
             </button>
           </div>
         </div>
       )}
 
-      {/* Step 4: Assets & Export */}
-      {currentStep === 4 && (
+      {/* Step 3: Export */}
+      {currentStep === 3 && (
         <div className="step-content">
-          <h2>Paso 4: Assets y exportación</h2>
+          <h2>Paso 3: Exportar</h2>
 
           <div className="generated-list">
             <div className="export-header">
@@ -413,7 +453,6 @@ export default function GeneratorPage() {
                   )}
                 </div>
 
-                {/* Show computed values per letter */}
                 {!trazado.error && trazado.dataJson && (
                   <div style={{ fontSize: '0.75rem', color: '#888', padding: '4px 12px', display: 'flex', gap: 16, flexWrap: 'wrap' }}>
                     <span>Canvas: {trazado.dataJson.letterSize?.[0]}×{trazado.dataJson.letterSize?.[1]}</span>
@@ -431,7 +470,7 @@ export default function GeneratorPage() {
           </div>
 
           <div className="step-actions">
-            <button className="btn btn-secondary" onClick={() => setCurrentStep(3)}>← Anterior</button>
+            <button className="btn btn-secondary" onClick={() => setCurrentStep(2)}>← Anterior</button>
           </div>
         </div>
       )}

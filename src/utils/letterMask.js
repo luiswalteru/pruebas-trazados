@@ -10,22 +10,50 @@ export async function buildLetterMask(fillSvgContent, width, height) {
   const url = URL.createObjectURL(blob);
   try {
     const img = await loadImage(url);
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, width, height);
-    ctx.drawImage(img, 0, 0, width, height);
-    const imgData = ctx.getImageData(0, 0, width, height);
-    const mask = new Uint8Array(width * height);
-    for (let i = 0; i < width * height; i++) {
-      mask[i] = imgData.data[i * 4 + 3] > 32 ? 1 : 0;
-    }
-    const dist = computeDistanceTransform(mask, width, height);
-    return { mask, dist, width, height };
+    return buildMaskFromDrawnImage(img, width, height, (a) => a > 32);
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+/**
+ * Build a binary mask + distance transform from a raster image (PNG/JPG data
+ * URL or object URL). A pixel counts as "inside the letter" when it is both
+ * sufficiently opaque AND darker than the paper — this handles transparent
+ * PNGs (letter on transparent bg) and flat JPGs (dark letter on white) with
+ * the same rule.
+ */
+export async function buildMaskFromImage(imageSrc, width, height) {
+  if (!imageSrc || !width || !height) return null;
+  const img = await loadImage(imageSrc);
+  // inside = opaque AND dark: alpha > 128 AND luminance < 200
+  const isInside = (r, g, b, a) => {
+    if (a <= 128) return false;
+    const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+    return lum < 200;
+  };
+  return buildMaskFromDrawnImage(img, width, height, null, isInside);
+}
+
+function buildMaskFromDrawnImage(img, width, height, alphaPredicate, rgbaPredicate) {
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, width, height);
+  ctx.drawImage(img, 0, 0, width, height);
+  const imgData = ctx.getImageData(0, 0, width, height);
+  const mask = new Uint8Array(width * height);
+  for (let i = 0; i < width * height; i++) {
+    const r = imgData.data[i * 4];
+    const g = imgData.data[i * 4 + 1];
+    const b = imgData.data[i * 4 + 2];
+    const a = imgData.data[i * 4 + 3];
+    const inside = rgbaPredicate ? rgbaPredicate(r, g, b, a) : alphaPredicate(a);
+    mask[i] = inside ? 1 : 0;
+  }
+  const dist = computeDistanceTransform(mask, width, height);
+  return { mask, dist, width, height };
 }
 
 function loadImage(src) {
