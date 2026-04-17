@@ -235,7 +235,7 @@ export default function GeneratorPage() {
           <div className="svg-mode-info">
             <p>Dibujarás el recorrido de cada trazado con el cursor en el paso 3.</p>
             <p style={{ fontSize: '0.85rem', color: '#888', marginBottom: 12 }}>
-              Opcionalmente, carga una fuente como referencia visual para ver la forma de las letras mientras dibujas.
+              Carga la fuente de referencia sobre la cual se realizará el trazado.
             </p>
             <div style={{ display: 'flex', gap: 10, justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap' }}>
               <input
@@ -246,9 +246,9 @@ export default function GeneratorPage() {
                 style={{ display: 'none' }}
               />
               <button className="btn btn-secondary" onClick={() => refFontInputRef.current?.click()}>
-                {refFontName ? `Referencia: ${refFontName}` : 'Cargar fuente de referencia (opcional)'}
+                {refFontName ? `Referencia: ${refFontName}` : 'Cargar fuente de referencia'}
               </button>
-              <button className="btn btn-primary" onClick={() => setCurrentStep(2)}>
+              <button className="btn btn-primary" onClick={() => setCurrentStep(2)} disabled={!refFont}>
                 Siguiente →
               </button>
             </div>
