@@ -2,103 +2,99 @@
 
 ## Estado actual del proyecto
 
-Tras el **refactor manual-only (abril 2026)** el proyecto se simplifico considerablemente:
-- Se eliminaron los modos `font` y `svg` de la UI. El unico flujo activo es dibujo manual.
-- Se añadio auto-centrado del cursor al eje medial de la letra (`letterMask.js` + `snapToCenterline` en `ManualPathDrawer`).
-- `letter-dotted.svg` pasa a emitirse como `<g id="pathN">` con `<circle>`s por coordenada (antes eran paths con `stroke-dasharray`).
-- `thum.png` se genera automaticamente al exportar (rasteriza fill + dots).
-- Se dejaron de exportar `character.png`, `fondo.png`, `audio/es/title.mp3` y `audio/val/title.mp3` (ni siquiera como placeholders).
-- `src/utils/pathSampler.js` y varias funciones de `fontParser.js` quedaron **sin usar** pero se conservan en el repo.
+Abril 2026. El flujo activo es:
+
+1. El usuario sube una imagen de referencia por letra — preferentemente un SVG con escena completa (letra + linea punteada guia + personaje decorativo). PNG/JPG se aceptan como fallback.
+2. `guideExtractor.extractGuideMaskFromImage` rasteriza el SVG, segmenta los blobs oscuros, descarta la letra y el personaje por tamaño, y arma una polilinea con los puntos guia restantes (edges K=2 + endpoints con grado 1).
+3. El usuario dibuja libre con el cursor (EMA ligero contra jitter, sin snap en tiempo real). Al soltar, `projectStrokeOnGuide` proyecta cada punto sobre la polilinea con sesgo direccional lateral (estimado desde la trayectoria cruda del cursor, no la proyectada).
+4. Si el input es PNG/JPG o la extraccion del SVG no encontro ≥3 puntos, se usa el fallback `centerStrokePoints` (distance transform chamfer 3-4).
 
 ---
 
 ## Tareas pendientes
 
-### 1. Resolver campos huerfanos en `data.json`
+### 1. Campos huerfanos en `data.json`
 **Prioridad: Alta**
 
-`generateDataJson` sigue escribiendo:
+`generateDataJson` sigue emitiendo:
 - `character: "character.png"`
 - `title.audio.es: "audio/es/title"`, `title.audio.val: "audio/val/title"`
 
-Pero esos archivos **ya no se incluyen en el ZIP**. Opciones:
-- [ ] Dejar de emitir esos campos cuando no hay los assets (romperia cualquier consumidor que los espere no-null)
-- [ ] Reintroducir uploads opcionales de imagen/audio en el paso 4 + placeholders
-- [ ] Confirmar que el componente consumidor los puede manejar como missing/placeholder
+Pero esos archivos **no se incluyen en el ZIP**. Opciones:
+- [ ] Dejar de emitir esos campos si no hay assets (romperia consumidores que los esperen no-null)
+- [ ] Reintroducir uploads opcionales en el paso 3
+- [ ] Confirmar que el consumidor tolera refs a archivos inexistentes
 
 ### 2. Desajuste en el campo `letter` para ñ
 **Prioridad: Media**
 
-- `getFolderName` mapea `ñ` → `ny` (carpeta = `trazado-letra-ny` / `trazado-letra-ny-mayus`)
-- `generateDataJson` escribe el campo `letter` como `"ñ"` / `"UpperÑ"` (sin mapeo)
+- `getFolderName` mapea `ñ` → `ny` (carpeta `trazado-letra-ny` / `trazado-letra-ny-mayus`)
+- `generateDataJson` escribe `letter` como `"ñ"` / `"UpperÑ"` (sin mapeo)
 
-Si el componente consumidor espera `"ny"` / `"UpperNy"` en el campo `letter`, hay que ajustar uno de los dos lados.
+Si el consumidor espera `"ny"` / `"UpperNy"` hay que ajustar uno de los dos lados.
 
 ### 3. Testing manual en navegador
 **Prioridad: Alta**
 
-- [ ] Dibujar trazados end-to-end sin fuente de referencia
-- [ ] Idem con fuente de referencia (verificar auto-centrado via `snapToCenterline`)
-- [ ] Preview reproduce correctamente los trazados generados
-- [ ] Atajos de teclado en `ManualPathDrawer` (N, Ctrl+Z, Enter, Esc)
-- [ ] Export individual + masivo (verificar que los ZIPs incluyen solo los 4 archivos correctos + `thum.png`)
+- [ ] Subir SVG estilo `ejemplo/trazado-letra-a/a_correct.svg` (escena completa) — verificar que el badge "Ajuste al soltar: guia SVG (N puntos)" aparece y que "Ver guia" muestra una polilinea coherente
+- [ ] Dibujar una letra con loop (cursiva a/e/o) y comprobar que al soltar el trazo no salta al otro lado del ovalo
+- [ ] Subir PNG/JPG — verificar que cae al fallback ("Ajuste al soltar: centrado por imagen") y que el centrado sigue funcionando
+- [ ] Preview reproduce bien los trazados generados
+- [ ] Atajos de teclado (N, Ctrl+Z, Enter, Esc)
+- [ ] Export individual + masivo (ZIP debe contener solo `data.json` + 3 SVG + `thum.png`)
 - [ ] Override de `dotSize` / `animationPathStroke` (0 vs >0)
-- [ ] Combos (`ch`, `ll`) se manejan bien incluso sin fuente de referencia (el fallback `generateFillSvgFromStrokes` dibuja algo razonable?)
+- [ ] Combos (`ch`, `ll`) end-to-end
 
-### 4. Decisiones sobre codigo muerto
-**Prioridad: Baja**
-
-- [ ] Eliminar `src/utils/pathSampler.js` si no se planea reintroducir el modo font
-- [ ] Eliminar `computeGlyphCanvasSize` y `getAvailableChars` de `fontParser.js` si se confirma que no se usan
-- [ ] Eliminar `computeDotCount` de `dataGenerator.js` si se confirma que no se usa en la UI actual
-
-### 5. Ajustes del contrato con el componente consumidor
+### 4. Calibracion del extractor
 **Prioridad: Media**
 
-Resuelto para `letter-dotted.svg`: se revirtio a paths dasheados (`stroke-dasharray: 0.1,16`) con el wrapper `<g id="path">`, que es el contrato que espera el componente educativo. Pendiente:
-- [ ] Validar que el `stroke-width` que se emite (= `animationPathStroke` efectivo) produce el tamaño de punto esperado. Si no, ajustar el argumento que pasa `GeneratorPage.generateForLetter` a `generateDottedSvg`.
+Los parametros actuales (`darkLum=90`, `maxSat=0.28`, `discardLargest=3`, `minDotArea=3`, `maxDotFraction=0.15`, `renderScale=2`) estan tuneados contra `ejemplo/trazado-letra-a/a_correct.svg`. Con letras distintas o estilos de ilustracion distintos pueden fallar.
 
-### 6. Mejoras de UX (baja)
-- [ ] Indicador de progreso durante generacion masiva
-- [ ] Preview en miniatura de los SVGs en el paso 4
-- [ ] Permitir reordenar trazos manualmente (hoy el orden viene dado por el orden de dibujo)
+- [ ] Probar mas SVGs reales y, si hay patrones claros de fallo, exponer los parametros como sliders de debug en la UI.
+- [ ] Evaluar si `discardLargest` deberia ser adaptativo (basado en histograma de areas) en lugar de un N fijo.
+
+### 5. Calibracion del sesgo direccional
+**Prioridad: Baja**
+
+`snapToPolyline` usa `lateralBias = 2.5`, `backwardPenalty = 0.4`, `dirLookback = 15px`. Si aparecen casos donde:
+- El trazo lucha contra el usuario en curvas muy cerradas → bajar `lateralBias` a ~1.5
+- Salta entre tramos paralelos muy cercanos → subir `lateralBias` a 3.5-4 o reducir `maxDist` a 60-70
+
+Ajuste directo en `guideExtractor.js`. Considerar slider de debug si se repite.
+
+### 6. Codigo muerto definitivamente eliminable
+**Prioridad: Baja**
+
+- [ ] Eliminar `src/utils/pathSampler.js` y `src/utils/fontParser.js` si se confirma que no se reintroduce el flujo tipografico.
+- [ ] Quitar `opentype.js` de `package.json` en ese caso.
+- [ ] Eliminar `computeDotCount` de `dataGenerator.js` (exportado pero no se llama).
+
+### 7. Mejoras UX (baja)
+- [ ] Progreso durante generacion/export masivo
+- [ ] Thumbnail miniatura de cada trazado en el paso 3
+- [ ] Reordenar trazos manualmente (hoy el orden es el de dibujo)
 
 ---
 
 ## Problemas resueltos
 
-### Resuelto: App sobrecomplicada con 3 modos
-**Solucion**: Refactor a manual-only. Paso 1 ahora es solo intro + carga opcional de fuente de referencia. Se eliminaron todos los handlers de SVG upload e import, y la dependencia de `pathSampler.js`.
+- **Snap en tiempo real se sentia pegajoso / saltaba de lado en loops**: se movio el ajuste a `endStroke`. Durante el dibujo el cursor va libre; al soltar se proyecta con sesgo direccional basado en la trayectoria cruda.
+- **Shortcut edges al cerrar el loop de la "a"**: bias lateral a 2.5 + `rawHistory` para evitar feedback desde proyecciones previas mal caidas.
+- **SVG con personaje contaminaba el mask**: `extractGuideMaskFromImage` filtra por saturacion baja + descarta los N blobs mas grandes.
+- **Trazados temblorosos / descentrados**: EMA sobre el cursor + proyeccion al soltar.
+- **Placeholders MP3/PNG no significativos**: se dejo de empaquetar assets que el generador no puede producir. `thum.png` si se genera al exportar.
+- **Navegacion Preview → Generador reiniciaba estado**: persistencia en `window.__generatorState` + `?step=N`.
+- **Preview no podia terminar el trazado**: `box-sizing: content-box`, sin reset en mouseUp, hit radius `max(dotSize, 28)`.
 
-### Resuelto: Trazados temblorosos / descentrados al dibujar
-**Solucion**: Pipeline de captura en `ManualPathDrawer` con:
-1. EMA sobre el cursor (`SMOOTH_ALPHA = 0.5`)
-2. Gate de distancia minima (1.2 px)
-3. `snapToCenterline` usando el gradiente del campo de distancia de la mascara del fill (distance transform chamfer 3-4 en `letterMask.js`). La correccion es radial hacia el esqueleto y se atenua a 0 cuando el punto ya esta centrado.
-
-### Resuelto: Placeholders MP3/PNG no significativos
-**Solucion**: Se dejo de empaquetar assets que el generador no puede producir. `thum.png` si se genera auto-rasterizando fill + dots en `thumGenerator.js`.
-
-### Resuelto: Inputs de configuracion deshabilitados en modo font
-**Solucion**: Modo font eliminado. Todos los inputs siempre habilitados.
-
-### Resuelto: Navegacion Preview -> Generador reiniciaba estado
-**Solucion**: Persistencia en `window.__generatorState` + URL param `?step=N`.
-
-### Resuelto: Preview no podia terminar el trazado
-**Solucion**: `box-sizing: content-box`, eliminado reset agresivo en mouseUp, hit radius `max(dotSize, 28)`, fix closure stale.
-
-### Conocido: Permisos de npm en sandbox
-Warnings durante `npm install` sobre rollup platform-specific. Inofensivos.
-
-### Conocido: Build requiere outDir alternativo
-Si `dist/` tiene permisos restrictivos, usar `--outDir /tmp/trazados-dist`.
+### Conocidos sin fix
+- `dist/` con permisos restrictivos en esta workstation: `npx vite build --outDir /tmp/trazados-dist`.
+- Warnings de rollup platform-specific al instalar: inofensivos.
 
 ---
 
 ## Contexto del proyecto destino
 
-Los trazados generados se integran en:
+Los trazados se integran en:
 ```
 public/lecto_pruebas_2026/assets/trazados/
   ligada/
@@ -109,18 +105,16 @@ public/lecto_pruebas_2026/assets/trazados/
     ...
 ```
 
-Componente React destino: carga `data.json`, muestra outline como guia, dotted como puntos, usuario arrastra dragger por los puntos, al completar muestra fill SVG. Soporta multi-stroke.
+Componente consumidor: carga `data.json`, muestra outline como guia, dotted como puntos, usuario arrastra dragger por los puntos, al completar muestra fill. Soporta multi-stroke.
 
-**Pendiente de confirmar** (ver "Ajustes del contrato" arriba): si el componente soporta el nuevo formato de `letter-dotted.svg` (circles-per-coord), y si tolera la ausencia de `character.png`/`audio/*`.
+Pendiente de confirmar: tolerancia a la ausencia de `character.png`/`audio/*` (campos que siguen en el JSON pero sin archivos).
 
 ---
 
-## Notas para continuar el desarrollo
+## Archivos clave del flujo actual
 
-1. **Iniciar servidor dev**: `npm run dev`
-2. **Archivos clave del flujo actual**: `GeneratorPage.jsx`, `ManualPathDrawer.jsx`, `letterMask.js`, `svgGenerator.js`, `exportUtils.js`, `thumGenerator.js`
-3. **Codigo legacy**: `pathSampler.js` y `computeGlyphCanvasSize`/`getAvailableChars` de `fontParser.js` no se usan
-4. **Estado global**: `window.__generatorState` (no Context ni Redux), `window.__trazadoPreview` (paso a Preview)
-5. **No hay tests unitarios** — se valida via build + uso manual
-6. **CSS**: Todo en `App.css`, sin CSS modules
-7. **Patron de override**: `0 = auto`, `>0 = forzado`, para `dotSize` y `animationPathStroke`
+- `src/pages/GeneratorPage.jsx` — wizard
+- `src/components/ManualPathDrawer.jsx` — canvas + proyeccion al soltar
+- `src/utils/guideExtractor.js` — extraccion de polilinea + `snapToPolyline` / `projectStrokeOnGuide`
+- `src/utils/letterMask.js` — fallback raster (distance transform)
+- `src/utils/svgGenerator.js`, `dataGenerator.js`, `thumGenerator.js`, `exportUtils.js` — output

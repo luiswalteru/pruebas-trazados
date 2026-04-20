@@ -1,121 +1,124 @@
 # Componentes - Documentacion Detallada
 
-> **Contexto (abril 2026)**: Tras el refactor manual-only, `GeneratorPage` se simplifico considerablemente. Los modos `font`/`svg`, los uploads de assets (audio/imagenes) y todo el pipeline de `pathSampler` desaparecieron de la UI.
+> **Contexto (abril 2026)**: Dibujo manual + proyeccion al soltar sobre la polilinea extraida del SVG de referencia. Los modos `font`/`svg-bundle`, el upload de fuente y los uploads de audio/imagen asset desaparecieron.
 
 ## GeneratorPage.jsx
 
-Componente principal del wizard de generacion de trazados. Reducido drasticamente respecto a la version anterior (ya no orquesta tres modos distintos).
+Wizard de 3 pasos (imagen → trazado → exportar).
 
 ### Estado (useState)
 
 | Variable | Tipo | Default | Descripcion |
 |----------|------|---------|-------------|
 | `type` | `'ligada'|'mayusculas'` | `'ligada'` | Tipo de letra |
-| `selectedLetters` | string[] | `[]` | Array de **a lo sumo una** letra (la seleccion es exclusiva) |
+| `selectedLetters` | string[] | `[]` | Array de **a lo sumo una** letra (seleccion exclusiva) |
 | `generatedTrazados` | object | `{}` | Map letra -> datos generados |
-| `generating` | boolean | `false` | Flag de generacion en curso |
-| `currentStep` | number | 1 | Paso actual del wizard (1-4) |
-| `dotCount` | number | 0 | Puntos por trazo al resamplear el dibujo (0 permitido, pero el manual-drawer usa su default 40 si viene 0) |
+| `generating` | boolean | `false` | Flag durante la generacion |
+| `currentStep` | number | 1 | Paso actual (1-3) |
+| `dotCount` | number | 0 | Puntos por trazo al resamplear (0 = usa default del drawer) |
 | `dotSize` | number | 0 | 0 = auto via `computeLetterParams`, >0 = forzado |
-| `canvasWidth` | number | 380 | Ancho del canvas (el usuario lo configura, ya no hay auto) |
+| `canvasWidth` | number | 380 | Ancho del canvas |
 | `canvasHeight` | number | 340 | Alto del canvas |
-| `strokeWidth` | number | 0 | 0 = auto via `computeLetterParams`, >0 = forzado |
+| `strokeWidth` | number | 0 | 0 = auto, >0 = forzado |
+| `dottedStrokeWidth` | number | 5 | Grosor del dash en `letter-dotted.svg` |
+| `dottedDash` | number | 7 | Longitud del dash |
+| `dottedGap` | number | 11 | Longitud del gap |
 | `manualDrawings` | object | `{}` | Map letra -> `{ dotList, strokePaths }` |
-| `refFont` | object/null | `null` | Fuente de referencia opcional (guia visual) |
-| `refFontName` | string | `''` | Nombre del archivo de fuente de referencia |
+| `images` | object | `{}` | Map letra -> dataURL de la imagen de referencia |
 
-**Ya no existen** (vs version anterior): `mode`, `font`, `fontName`, `importedSvgs`, `audioFiles`, `imageFiles`, `manualActiveLetter` (se derivo a `activeLetter = selectedLetters[0]` porque solo hay una letra a la vez).
+`activeLetter = selectedLetters[0]`. `activeImage = images[activeLetter]`.
 
 ### Persistencia
 
-Todo el estado se vuelca a `window.__generatorState` en un `useEffect` sin array de dependencias (corre en cada render). Al montar se restaura desde `window.__generatorState` o valores default. El paso actual se lee de `?step=N` o del estado persistido.
+Todo se vuelca a `window.__generatorState` (incluyendo `images`) en un `useEffect` sin array de dependencias — sobrevive a la navegacion a Preview. Paso actual en URL `?step=N`.
 
 ### Handlers principales
 
 #### `toggleLetter(letter)`
-Selecciona **una sola** letra. Si se hace click en la misma letra ya seleccionada, se deselecciona. Si se hace click en otra, reemplaza la seleccion actual.
+Selecciona **una sola** letra (click en la misma la deselecciona; click en otra la reemplaza).
 
-#### `handleRefFontUpload(e)`
-Carga la fuente de referencia opcional. Parsea con `parseFont` y guarda en `refFont` / `refFontName`.
-
-#### `getRefSvgs(letter)`
-Genera `fillSvg`, `outlineSvg` y `fillPathD` para una letra usando la fuente de referencia. Retorna strings vacios si no hay `refFont`. Usado tanto como guia visual en el drawer como para el export final.
+#### `handleImageUpload(e)` / `clearImage()`
+Lee el archivo con `FileReader.readAsDataURL` — acepta `.svg`, `.png`, `.jpg`, `.jpeg` (mime `image/svg+xml`, `image/png`, `image/jpeg`). Guarda en `images[activeLetter]`.
 
 #### `handleManualComplete(letter, result)`
-Callback al terminar un dibujo. Solo guarda `{ dotList, strokePaths }` en `manualDrawings[letter]`. Ya no hay auto-avance: como la seleccion es exclusiva (una letra), no hay "siguiente" a la que saltar.
+Callback del `ManualPathDrawer`. Guarda `{ dotList, strokePaths }` en `manualDrawings[letter]`.
 
-#### `generateForLetter(letter)` (CRITICO)
-Unico path de generacion (ya no hay branches font/svg/manual):
-
+#### `generateForLetter(letter)`
 1. Lee `manualDrawings[letter]` — error si no existe
-2. Usa `canvasWidth` / `canvasHeight` tal cual
-3. Calcula `effDotSize` / `effStroke` via override 0/>0 + `computeLetterParams`
-4. `getRefSvgs(letter)` — fill/outline desde la fuente si hay, fallback a `generateFillSvgFromStrokes` / `generateOutlineSvgFromStrokes` si no
-5. `generateDottedSvg(strokePaths, w, h)` — paths dasheados con defaults (`stroke-width: 5`, `stroke-dasharray: 7,11`) que reproducen el visual del bundle de referencia (rayas capsuladas de ~12×5 px, periodo 18). No se usa `animationPathStroke` aqui — ese solo alimenta el `data.json` para la animacion del consumidor
-6. `animationPaths`: por cada stroke, `{ length: coordinates.length, time: max(2, round(length/4)) }`
-7. Construye `data.json` via `generateDataJson`
+2. Usa `canvasWidth`/`canvasHeight` tal cual
+3. `effDotSize`/`effStroke` = override 0/>0 + `computeLetterParams`
+4. `letter-fill.svg` / `letter-outline.svg`: siempre stroke-based (la imagen de referencia es raster/ilustrada, no se vectoriza). `fillStrokeWidth = max(20, effDotSize * 1.2)` para que el fill cubra bien.
+5. `letter-dotted.svg`: `generateDottedSvg(strokePaths, w, h, dottedStrokeWidth, "${dottedDash},${dottedGap}")` — el usuario controla el espesor y dash/gap.
+6. `animationPaths`: por cada stroke `{ length, time: max(2, round(length/4)) }`.
+7. Construye `data.json` via `generateDataJson`.
 
-Retorno: `{ letter, folderName, fillSvg, outlineSvg, dottedSvg, dataJson, dotList, strokePaths, fillPathD }`. `strokePaths` y `fillPathD` se usan luego en `thumGenerator` al exportar.
+Retorno: `{ letter, folderName, fillSvg, outlineSvg, dottedSvg, dataJson, dotList, strokePaths }`.
 
 #### `handleGenerate()` / `handleExportSingle(letter)` / `handleExportAll()`
-Generar todas las letras seleccionadas, exportar individual/masivo.
-Ojo: `handleExportSingle` y `handleExportAll` son ahora `async` (porque el export genera `thum.png`).
+Export es async (genera `thum.png`).
 
 #### `handlePreview(letter)`
 Coloca `{ dataJson, fillSvg, outlineSvg, dottedSvg }` en `window.__trazadoPreview` y navega a `/preview`.
 
 ### UI por Paso
 
-- **Paso 1 — Inicio**: Texto introductorio + boton "Cargar fuente de referencia (opcional)" + "Siguiente". **Sin selector de modo**.
-- **Paso 2 — Letras**: Toggle ligada/mayusculas + grid de letras (seleccion exclusiva — una sola). Contador indica la letra activa.
-- **Paso 3 — Configurar y generar**: Inputs (canvas w/h, dotCount, dotSize, strokeWidth). El `ManualPathDrawer` aparece directamente con la letra seleccionada en Step 2 — no hay tabs porque solo se dibuja una letra a la vez. Un tick ✓ en el titulo indica si esa letra ya tiene un trazado guardado. Boton "Generar".
-- **Paso 4 — Assets y exportacion**: Lista de trazados generados con valores computados (canvas, dotSize, stroke, trazos, puntos por trazo). Botones `Preview` / `Exportar` por item + `Exportar todos como ZIP` global. **Ya no hay uploads** de audio/imagen.
+- **Paso 1 — Imagen**: Toggle ligada/mayusculas + grid de letras (las que tienen imagen muestran ✓) + panel de carga con preview (160×140 contain). `canAdvanceFromStep1 = activeLetter && activeImage`. El input `file` acepta `.svg,.png,.jpg,.jpeg,image/svg+xml,image/png,image/jpeg`.
+- **Paso 2 — Trazado**: Config (canvas w/h, dotCount, dotSize, strokeWidth, dottedStrokeWidth/dash/gap). Debajo, el `ManualPathDrawer` con la imagen pasada como `imageSrc`. Boton "Generar y continuar".
+- **Paso 3 — Exportar**: Lista de trazados generados con info por letra (canvas, dotSize, stroke, N trazos, puntos por trazo). Botones `Preview`, `Exportar`, `Exportar todos como ZIP`.
 
 ---
 
 ## ManualPathDrawer.jsx
 
-Canvas de dibujo manual. Produce `{ dotList, strokePaths }` al finalizar.
+Canvas de dibujo manual con proyeccion diferida al soltar el trazo. Produce `{ dotList, strokePaths }` al guardar.
 
 ### Props
 
 | Prop | Tipo | Default | Descripcion |
 |------|------|---------|-------------|
-| `letter` | string | `''` | Letra que se esta dibujando (para display) |
+| `letter` | string | `''` | Letra (solo display) |
 | `type` | `'ligada'|'mayusculas'` | `'ligada'` | Display |
-| `fillSvg` | string | `''` | SVG fill como guia visual (opacity 8%) Y **fuente de la mascara** para `snapToCenterline` |
-| `outlineSvg` | string | `''` | SVG outline como guia visual (opacity 20%) |
-| `width`, `height` | number | 380, 340 | Dimensiones del canvas en unidades de letra |
+| `imageSrc` | string | `''` | Imagen de referencia (dataURL). SVG -> extractor; PNG/JPG -> mask clasico |
+| `width`, `height` | number | 380, 340 | Dimensiones del canvas en espacio de letra |
 | `dotCount` | number | 40 | Puntos por trazo al resamplear |
-| `dotSize` | number | 33 | Solo informativo (no afecta el dibujo) |
+| `dotSize` | number | 33 | Solo informativo |
 | `onComplete` | function | - | Callback con `{ dotList, strokePaths }` |
 | `onCancel` | function | - | Callback al cancelar |
 
 ### Estado interno
 
-- `isDrawing` (boolean): si hay trazo en curso
-- `strokes` (Array<Array<{x,y}>>): trazos completados
-- `currentStroke` (Array<{x,y}>): puntos del trazo actual
-- `cursorPos` ({x,y}/null): para dibujar el crosshair
-- `maskRef` (ref): resultado de `buildLetterMask(fillSvg, width, height)` — se reconstruye cuando cambia `fillSvg`
+- `isDrawing` (boolean): hay trazo en curso
+- `strokes`: trazos completados (ya proyectados sobre la guia al soltar)
+- `currentStroke`: puntos del trazo en curso (crudos, sin proyectar)
+- `cursorPos`: para el crosshair
+- `maskRef` (ref): mask raster + distance transform si se uso el fallback (PNG/JPG) o si el SVG no dio suficientes puntos
+- `guideRef` (ref): `{ centroids, edges, endpoints }` cuando se extrajo la polilinea del SVG
+- `guideDebug` (state): mismo contenido que `guideRef.current` + `dotCount`, usado para el overlay de debug
+- `showGuideDebug` (state): toggle del overlay
+- `maskMode` (state): `'svg-dots'` | `'fallback'` | `'none'` — decide que adjuster usar en `adjustStrokeToGuide`
 
-### Pipeline de captura (NUEVO — april 2026)
+### Carga de la guia (useEffect)
 
-El punto crudo del cursor no se usa tal cual. Cada movimiento pasa por:
+Cuando cambia `imageSrc` / `width` / `height`:
 
-1. **EMA con el punto anterior** (`SMOOTH_ALPHA = 0.5`): filtro pasa-bajos contra jitter de mano.
-2. **Gate de distancia minima** (`1.2 px` desde el ultimo guardado): evita sobre-muestreo.
-3. **`snapToCenterline`** contra la mascara de `fillSvg`: empuja al punto hacia el eje medial de la letra via gradiente del distance field. Si no hay `fillSvg` (es decir, no se cargo fuente de referencia) es un no-op.
+1. Si `isSvgSource(imageSrc)` → intenta `extractGuideMaskFromImage`. Si devuelve ≥3 puntos y ≥1 edge → `guideRef = { centroids, edges, endpoints }`, `maskMode = 'svg-dots'`.
+2. En cualquier otro caso (raster, SVG degenerado, error) → `buildMaskFromImage` y `maskMode = 'fallback'`.
+3. Si tampoco eso funciona → `maskMode = 'none'`, el trazo se guarda crudo.
 
-Esto se hace **en tiempo real mientras el usuario dibuja** — los puntos que se van acumulando en `currentStroke` ya estan centrados y suavizados.
+### Pipeline de dibujo
 
-### Mecanica de dibujo
+Realtime (durante el arrastre):
+1. **EMA** con `SMOOTH_ALPHA = 0.5` contra el punto anterior del trazo.
+2. **Gate de distancia minima** (`1.2 px`) — no oversamplear.
+3. Se guarda el punto tal cual. **No hay snap en tiempo real** — el cursor va libre sobre la guia visual.
 
-1. **Mouse-down**: Inicia trazo, registra primer punto (ya pasado por `snapToCenterline`)
-2. **Mouse-move**: Si `isDrawing`, aplica pipeline y agrega al trazo
-3. **Mouse-up**: Finaliza si el trazo tiene ≥ 2 puntos
-4. **Click nuevo**: Inicia otro trazo (multi-stroke)
-5. **Touch**: Mismo comportamiento
+Al soltar (`endStroke`):
+- Si el trazo tiene <2 puntos, se descarta.
+- Si no, se llama `adjustStrokeToGuide(currentStroke)`:
+  - `maskMode === 'svg-dots'` → `projectStrokeOnGuide(points, guideRef.current)` (ver `UTILITIES.md`).
+  - `maskMode === 'fallback'` → `centerStrokePoints(points, maskRef.current)` (pasada iterativa por distance transform).
+  - `maskMode === 'none'` → se deja como esta.
+- El trazo ajustado se agrega a `strokes`.
 
 ### Atajos de teclado
 
@@ -130,28 +133,35 @@ Esto se hace **en tiempo real mientras el usuario dibuja** — los puntos que se
 
 - **Deshacer (Ctrl+Z)**: quita el ultimo trazo completado
 - **Limpiar (Esc)**: borra todos los trazos
-- **Centrar trazado**: post-proceso que corrige temblores y centra los trazos en el eje medial de la letra via `centerStrokePoints`. **Requiere fuente de referencia cargada** en el paso 1 (sin mascara no hay a donde centrar); en ese caso el boton se deshabilita con tooltip explicativo. Reemplaza `strokes` in-place para que el resultado sea visible antes de guardar. Tipicamente se usa una vez dibujados todos los trazos, justo antes de Guardar
+- **Centrar trazado**: re-aplica `adjustStrokeToGuide` a todos los trazos (util para repetir el ajuste o aplicarlo a un trazo que no se haya soltado por mouseUp limpio). Habilitado cuando hay trazos; usa polilinea si esta disponible, si no el fallback raster.
+- **Ver guia** (solo si hay `guideDebug`): toggle del overlay de depuracion — dibuja los edges en cian, los centroides en verde azulado oscuro, y los endpoints en naranja grande. Permite verificar visualmente la calidad de la extraccion.
 - **Guardar (Enter)**: dispara `handleFinalize`
+
+### Indicador de modo
+
+En la barra de atajos:
+- `svg-dots` → "Ajuste al soltar: guia SVG (N puntos)" en verde.
+- `fallback` → "Ajuste al soltar: centrado por imagen" en naranja.
+- `none` → (ningun texto).
 
 ### Visualizacion
 
-- Canvas con borde que cambia de color al dibujar (gris -> naranja)
-- Guia: fill SVG muy tenue (8%) + outline (20%)
-- Trazos completados: polyline naranja (opacity 70%), marcador inicio azul, fin verde, numero de trazo como texto
-- Trazo actual: polyline naranja opaca + marcador inicio azul
-- Crosshair gris siguiendo al cursor (opacity 40%)
-- Badge "Auto-centrado activo" en verde si hay `fillSvg` (es decir, hay mascara)
-- Lista de trazos debajo con info de puntos e inicio/fin
+- Canvas escalado 1.4× (`transform: scale(1.4)` sobre el hijo); el borde cambia de gris a naranja al dibujar.
+- Imagen de referencia de fondo al 40% opacity con `object-fit: contain` (aspect preservado — misma geometria que usa el extractor).
+- Trazos completados: polyline naranja 70% + marcador inicio azul + marcador fin verde + numero de trazo.
+- Trazo actual: polyline naranja opaca + marcador inicio azul.
+- Crosshair gris siguiendo el cursor.
+- **Debug overlay** (cuando `showGuideDebug`): edges en cian, centroides oscuros, endpoints en naranja 4px con borde blanco.
 
 ### Proceso de finalizacion (`handleFinalize`)
 
-1. Combina `strokes` + `currentStroke` (si tiene ≥ 2 puntos)
-2. Por cada trazo:
+1. Combina `strokes` + `currentStroke` (si tiene ≥2 puntos — ese caso adicional corre el adjuster tambien).
+2. Por cada trazo ya ajustado:
    - `resample(pts, dotCount)` a N puntos equidistantes
    - Formato `{ coords: [x.toFixed(3), y.toFixed(3)] }`
    - Marca esquinas donde |Δangulo| > π/4
    - `dragger` = primer punto con `toFixed(0)`
-3. Construye `strokePaths`: `smooth(pts, 2)` -> path `"d"` con comandos `M` y `L` -> `{ id: 'path{i+1}', d }`
+3. `strokePaths`: `smooth(pts, 2)` -> path `"d"` con `M` + `L` -> `{ id: 'path{i+1}', d }`
 4. Llama `onComplete({ dotList, strokePaths })`
 
 ### Conversion de coordenadas
@@ -251,10 +261,4 @@ Header con links (NavLink / useLocation para marcar activo): Inicio, Generador, 
 
 ## HomePage.jsx
 
-Landing page simple:
-- Hero con titulo y subtitulo que explicita dibujo manual (*"dibujando el recorrido manualmente con el cursor"*)
-- Botones: "Comenzar a Generar" → `/generator`, "Ver Preview" → `/preview`
-- **3 feature cards** (antes habia 4 — las de "Tipografia" y "SVG" se eliminaron):
-  1. Trazado Manual
-  2. Preview Interactivo
-  3. Exportacion Completa
+Landing minimalista: hero con titulo + subtitulo + unico boton "Comenzar a Generar" → `/generator`. No hay feature cards ni link directo a Preview (se accede via el export desde el generador).

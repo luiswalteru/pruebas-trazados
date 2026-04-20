@@ -1,48 +1,91 @@
 # Utilidades - Documentacion Tecnica
 
-> **Importante (abril 2026)**: La app es manual-only. Las utilidades "core" del flujo actual son `letterMask.js`, `svgGenerator.js`, `thumGenerator.js`, `dataGenerator.js` y `exportUtils.js`. `fontParser.js` solo se usa para la fuente de referencia opcional (guia visual). **`pathSampler.js` ya no se importa en ninguna parte** — es codigo legacy conservado en el repo.
+> **Importante (abril 2026)**: La app es dibujo manual con proyeccion al soltar. Las utilidades "core" del flujo actual son `guideExtractor.js` (extraccion de la linea guia + proyeccion), `letterMask.js` (fallback raster), `svgGenerator.js`, `thumGenerator.js`, `dataGenerator.js` y `exportUtils.js`. **`fontParser.js` y `pathSampler.js` no se importan en ningun lado** — son legacy conservados en el repo.
 
 ---
 
-## letterMask.js (NUEVO)
+## guideExtractor.js (CORE)
 
-Rasteriza el `letter-fill.svg` a una mascara binaria y precomputa una **transformada de distancia (chamfer 3-4)** para poder tirar puntos dibujados hacia el eje medial (esqueleto) de la letra de forma estable e independiente de la direccion.
+Extrae la linea guia desde una imagen SVG con escena completa (letra + punteado + personaje), y proyecta los trazos dibujados sobre esa linea. Es el corazon del ajuste al soltar el trazo.
 
-Usado por `ManualPathDrawer` para suavizar el trazado del usuario.
+Pipeline:
+
+1. **Rasterizado aspect-fit** del SVG a 2× canvas (para que los puntos guia pequeños sobrevivan el thresholding).
+2. **Binarizado** de pixeles "tinta": luminancia < 90 **y** saturacion < 0.28 — filtra los colores vivos del personaje y deja solo letra + puntos guia en tonos oscuros.
+3. **Connected components** con flood-fill 8-way. Cada blob registra area, pixeles, bounding box y centroide.
+4. **Filtrado**: descarta los 3 blobs mas grandes (letra + silueta del personaje + sombras grandes) y cualquiera que exceda el 15% del mayor. Los blobs restantes son los **puntos del punteado**.
+5. **Construccion de polilinea**: edges K=2 vecinos mas cercanos, con corte de distancia a ~2.5× la mediana de distancia-al-vecino — evita edges que crucen entre trazos separados.
+6. **Endpoints**: vertices con grado 1 en el grafo de edges. Sirven para desambiguar el inicio/fin del trazo.
 
 ### Funciones exportadas
 
+#### `async extractGuideMaskFromImage(imageSrc, width, height, opts = {})`
+Ejecuta el pipeline completo y devuelve:
+```
+{
+  mask: Uint8Array,       // mascara dilatada de los puntos guia (width * height)
+  dist: Float32Array,     // distance transform chamfer 3-4 de esa mascara
+  width, height,
+  centroids: [{x,y,area}],
+  edges: [{a,b}],         // indices en centroids[]
+  endpoints: [i, j, ...], // indices en centroids[] con grado 1
+  debug: { dotCount, centroids, edges, endpoints }
+}
+```
+Retorna `null` si no sobrevive ningun blob.
+
+Opciones relevantes: `darkLum` (default 90), `maxSat` (0.28), `discardLargest` (3), `minDotArea` (3), `maxDotFraction` (0.15), `renderScale` (2).
+
+#### `isSvgSource(src)`
+Sniff rapido de si una url/dataURL es SVG (`data:image/svg+xml` o extension `.svg`). Usado por `ManualPathDrawer` para decidir si llamar al extractor o al fallback raster.
+
+#### `snapToPolyline(point, centroids, edges, opts = {})`
+Proyecta un punto al **segmento mas cercano** de la polilinea, con sesgo direccional para no saltar a un tramo topologicamente lejano.
+
+Modos de sesgo:
+- Con `rawHistory` (recomendado, path crudo del cursor): calcula la tangente acumulando arco hacia atras hasta `dirLookback = 15px`, descompone `(proj - prev)` en `forward` (a favor de la tangente) y `lateral` (perpendicular), y suma al score `lateralBias * lateral² + backwardPenalty * max(0, -forward)²`. Por defecto `lateralBias = 2.5`, `backwardPenalty = 0.4`.
+- Solo con `history` (proyectado): si no viene `rawHistory`, usa la historia proyectada para la tangente. Menos robusto porque una proyeccion errada contamina la dirección.
+- Sin ninguna: fallback a `continuityBias * |proj - prev|²` (default 0.3).
+
+`maxDist` (default 80 px) descarta proyecciones demasiado lejanas al cursor — si todas superan el radio devuelve el punto sin cambios.
+
+#### `snapToEndpoint(point, centroids, endpoints, opts = {})`
+Devuelve el endpoint (centroide de grado 1) mas cercano al punto, si esta dentro de `maxDist` (default 40). Si no hay ninguno cerca devuelve `null`.
+
+Usada al proyectar el primer y ultimo punto de un trazo para que aterricen limpios en los extremos de la guia.
+
+#### `projectStrokeOnGuide(points, guide, opts = {})`
+Orquesta la proyeccion de un trazo completo:
+
+1. Primer punto: `snapToEndpoint` (radio `endpointRadius` = 50) o proyeccion libre.
+2. Cada punto siguiente: `snapToPolyline` con `rawHistory = points.slice(i-10, i+1)` (direccion desde la trayectoria cruda del usuario) y `history = out.slice(-5)` (referencia de continuidad desde lo ya proyectado).
+3. Ultimo punto: `snapToEndpoint` si hay uno cerca.
+4. Dos pasadas de neighbour-averaging (`25/50/25`, extremos fijos) para limpiar micro-jitter entre proyecciones que caen en segmentos contiguos.
+
+Invocada por `ManualPathDrawer.endStroke` y por el boton "Centrar trazado".
+
+---
+
+## letterMask.js (fallback raster)
+
+Usado cuando el input no es SVG o cuando la extraccion de `guideExtractor` no encuentra suficientes puntos. Rasteriza la imagen a una mascara binaria y precomputa un distance transform chamfer 3-4 para tirar puntos hacia el eje medial.
+
+### Funciones exportadas
+
+#### `async buildMaskFromImage(imageSrc, width, height)`
+Carga cualquier imagen (PNG/JPG/SVG), la dibuja en canvas, clasifica cada pixel como "dentro" si `alpha > 128 && luminancia < 200`, y calcula el distance transform. Devuelve `{ mask, dist, width, height }`.
+
 #### `async buildLetterMask(fillSvgContent, width, height)`
-Construye la mascara y el campo de distancia.
-- **Input**: string del SVG fill, dimensiones
-- **Output**: `{ mask: Uint8Array, dist: Float32Array, width, height }` o `null` si falta algun input
-- **Proceso**: carga el SVG como imagen -> dibuja en canvas -> convierte a mascara binaria (`alpha > 32 = 1`) -> calcula distance transform (chamfer 3-4) con dos pasadas (forward + backward)
+Variante que acepta el string de un SVG fill (sin pasar por `<img>`). Usa el mismo predicado de alfa para la mascara binaria. Hoy solo se conserva por compatibilidad; no tiene callers en la UI activa.
 
 #### `centerStrokePoints(points, maskInfo, opts = {})`
-Pasada de post-proceso sobre un trazo completo. Se llama **despues** de que el usuario dibujo todos los trazos para corregir temblores y centrar la trayectoria en el eje medial de la letra. Pipeline:
-
-1. Suavizado pesado (25/50/25, `preSmoothIterations = 8`) conservando extremos — quita tembleque de alta frecuencia
-2. `snapIterations = 12` iteraciones agresivas de `snapToCenterline` con `maxStep = 5` y `pullStrength = 2.5` sobre **todos los puntos** del trazo
-3. Suavizado ligero (`postSmoothIterations = 2`) para restaurar continuidad C1 despues de los snaps discretos
-
-Si `maskInfo` es `null` (no se cargo fuente de referencia) se salta el paso 2 y la funcion opera solo como "super-suavizado".
-
-Expuesta a la UI via el boton "Centrar trazado" en `ManualPathDrawer`.
+Pasada iterativa de centrado (pre-smooth 8 iter, snap 12 iter con `maxStep = 5` y `pullStrength = 2.5`, post-smooth 2 iter). Se llama desde `adjustStrokeToGuide` cuando no hay polilinea SVG, y desde el boton "Centrar trazado" en el mismo caso.
 
 #### `snapToCenterline(point, maskInfo, opts = {})`
-Empuja suavemente un punto hacia el eje medial de la letra usando el **gradiente del campo de distancia** (que dentro de la forma apunta hacia el esqueleto — magnitud ~0 en el centro).
+Empuja un punto al eje medial usando el gradiente del distance field. Correccion radial, magnitud ~0 en el esqueleto. Aun se usa dentro de `centerStrokePoints` pero ya **no se invoca en tiempo real** durante el dibujo — solo en la pasada de ajuste al soltar.
 
-- **Input**:
-  - `point`: `{ x, y }` ya pasado por smoothing de entrada
-  - `maskInfo`: resultado de `buildLetterMask`, o `null` para no-op
-  - `opts.pullStrength` (default 1.2)
-  - `opts.maxStep` (default 2 px)
-  - `opts.pullRadius` (default 40) — radio maximo para buscar el pixel interior mas cercano si el punto cae fuera
-- **Output**: `{ x, y }` corregido
-
-**Ventaja sobre un pull direccional**: al usar el gradiente del distance field, la correccion es siempre radial hacia el esqueleto y se atenua a cero cuando el punto ya esta centrado. No depende de la direccion del movimiento del usuario (que es ruidosa).
-
-Si `maskInfo === null` o si el punto esta muy cerca del esqueleto (`gmag < 0.15`), retorna el punto sin cambios. Si el punto cae fuera de la letra, primero busca en espiral el interior mas cercano (dentro de `pullRadius`) y opera desde ahi.
+#### `computeDistanceTransform(mask, width, height)`
+Chamfer 3-4 en dos pasadas. **Exportado** para que `guideExtractor.js` lo reutilice sobre su mascara filtrada.
 
 ---
 
@@ -175,37 +218,11 @@ Escribe en el folder de JSZip:
 
 ---
 
-## fontParser.js (SOLO PARA GUIA VISUAL)
+## fontParser.js y pathSampler.js (LEGACY — no importados)
 
-Parsea fuentes tipograficas y extrae glifos como paths SVG. **Ya no es parte del flujo de generacion** — solo se usa cuando el usuario carga una fuente de referencia opcional en el paso 1, para:
+Ninguno de estos modulos se importa en la app actual. Se conservan como referencia por si alguna vez se quiere reintroducir la generacion automatica desde tipografias.
 
-1. Mostrar la forma de la letra bajo el canvas de `ManualPathDrawer` (opacity 8% + 20%)
-2. Generar `letter-fill.svg` y `letter-outline.svg` en el export (en lugar de los fallbacks `FromStrokes`)
-3. Construir la mascara de distancia via `buildLetterMask` para el auto-centrado del cursor
+- **`fontParser.js`**: parsing de TTF/OTF/WOFF con opentype.js y extraccion de glifos como paths SVG. Funciones expuestas: `parseFont`, `glyphToSvgPathData`, `computeGlyphCanvasSize`, `getAvailableChars`.
+- **`pathSampler.js`**: pipeline de esqueletonizacion Zhang-Suen + merge colineal + smoothing + resample + paths Bezier. Funciones: `samplePathPoints`, `samplePathPointsMultiStroke`, `extractSkeletonSegments`, `generateCenterlinePaths`, `extractPathsFromSvg`.
 
-### Funciones exportadas
-
-- **`parseFont(arrayBuffer)`**: parsea TTF/OTF/WOFF via opentype.js
-- **`glyphToSvgPathData(font, char, targetWidth, targetHeight, padding)`**: extrae un glifo y lo escala/centra al canvas objetivo. Retorna `{ d, width, height, scale, offsetX, offsetY, bbox }`
-- **`computeGlyphCanvasSize(font, char, type, padding)`**: computa dimensiones "naturales" del canvas. **Ya no se usa** en el flujo actual (el tamaño de canvas viene siempre del usuario). Conservado por si se reintroduce el modo font.
-- **`getAvailableChars(font)`**: lista caracteres disponibles (tampoco se usa en la UI actual)
-
----
-
-## pathSampler.js (LEGACY — no importado)
-
-Modulo de esqueletonizacion / muestreo de puntos heredado del antiguo modo `font`/`svg`. **No lo importa ningun archivo de la app actual** — el modo manual usa un `resample` + `smooth` propios dentro de `ManualPathDrawer.jsx`.
-
-Se conserva en el repo por dos razones:
-1. Referencia para re-introducir generacion automatica desde fuente en el futuro.
-2. El algoritmo (Zhang-Suen thinning + junction detection + merge colineal + smoothing + resample) esta bien documentado y es dificil de reconstruir desde cero.
-
-Si se decide depurar el repo, este archivo puede eliminarse sin romper nada.
-
-Funciones que exporta (todas actualmente muertas):
-- `samplePathPoints`, `samplePathPointsMultiStroke` — muestreo
-- `extractSkeletonSegments` — extrae segmentos + longitudes
-- `generateCenterlinePaths` — paths SVG de linea central con curvas Bezier
-- `extractPathsFromSvg` — parser de paths + viewBox desde un string SVG
-
-Constantes: `RASTER_SCALE = 2`, `MIN_SEGMENT_RATIO = 0.08`.
+Si se decide depurar el repo, ambos pueden eliminarse sin romper nada.

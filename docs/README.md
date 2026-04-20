@@ -2,9 +2,11 @@
 
 ## Descripcion General
 
-Aplicacion standalone Vite + React para generar ejercicios interactivos de trazado de letras ("trazados") para una app educativa infantil React. Por cada letra se generan `data.json`, los tres SVGs (`letter-fill`, `letter-outline`, `letter-dotted`) y un `thum.png` auto-generado, en dos variantes: **ligada** (cursiva minusculas) y **mayusculas**.
+Aplicacion standalone Vite + React para generar ejercicios interactivos de trazado de letras ("trazados") para una app educativa infantil. Por cada letra se generan `data.json`, los tres SVGs (`letter-fill`, `letter-outline`, `letter-dotted`) y un `thum.png` auto-generado, en dos variantes: **ligada** (cursiva minusculas) y **mayusculas**.
 
-> **Refactor (abril 2026)**: La app es ahora **solo de dibujo manual**. Los modos `font` y `svg` se eliminaron junto con todo el pipeline de esqueletonizacion automatica. Los archivos `src/utils/pathSampler.js` y `src/utils/fontParser.js` ya no se importan en la app (la fuente solo se usa como guia visual para dibujar). El paso 4 dejo de aceptar uploads de audios/imagenes — `thum.png` se genera automaticamente al exportar y no se producen placeholders de audio/imagenes.
+> **Estado actual (abril 2026)**: dibujo manual sobre una imagen/SVG de referencia. El usuario sube un SVG ilustrado (letra + linea punteada guia + personaje) y dibuja el recorrido con el cursor. Al soltar, el trazo se proyecta automaticamente sobre la polilinea de puntos guia extraida del SVG. PNG/JPG tambien se aceptan como fallback (usan el centrado clasico por distance transform).
+>
+> Los archivos `src/utils/pathSampler.js` y `src/utils/fontParser.js` no se importan en ningun lado — son legacy. El export nunca incluye `character.png`, `fondo.png` ni audios; `thum.png` se genera automaticamente al rasterizar fill + dotted.
 
 ## Instalacion y Ejecucion
 
@@ -26,9 +28,10 @@ No hay tests, linter ni typecheck configurados. La "correctitud" se valida compi
 
 - **Vite 6** + **@vitejs/plugin-react** - Bundler y HMR
 - **React 18** + **React Router DOM 6** - UI y navegacion SPA
-- **opentype.js 1.3.4** - Parsing de fuente opcional (solo para mostrar la letra como guia visual en el dibujo manual)
 - **JSZip 3.10.1** - Generacion de archivos ZIP
 - **file-saver 2.0.5** - Descarga de archivos desde el navegador
+
+`opentype.js` sigue como dependencia de `package.json` pero ya no se importa — el flujo actual no usa fuentes tipograficas.
 
 ## Estructura del Proyecto
 
@@ -50,38 +53,31 @@ trazados-generator/
     App.jsx                         # Layout principal con navegacion
     App.css                         # Estilos globales de toda la app
     pages/
-      HomePage.jsx                  # Landing page con 3 feature cards
+      HomePage.jsx                  # Landing minimalista con un solo CTA
       GeneratorPage.jsx             # Wizard principal de 4 pasos
       PreviewPage.jsx               # Preview interactivo del trazado
     components/
-      ManualPathDrawer.jsx          # Canvas de dibujo manual de trazos
+      ManualPathDrawer.jsx          # Canvas de dibujo manual + proyeccion del trazo al soltar
     utils/
-      letterMask.js                 # Distance transform + medial-axis snapping (usado en dibujo)
+      guideExtractor.js             # Rasterizado del SVG -> segmentacion -> polilinea + proyeccion
+      letterMask.js                 # Distance transform + centerStrokePoints (fallback PNG/JPG)
       svgGenerator.js               # Generacion de SVGs (fill, outline, dotted + fallbacks de strokes)
-      thumGenerator.js              # Rasteriza fill + dots a thum.png
-      dataGenerator.js              # Generacion de data.json + nombres de carpeta + computeLetterParams/computeDotCount
+      thumGenerator.js              # Rasteriza fill + dotted a thum.png
+      dataGenerator.js              # Generacion de data.json + nombres de carpeta + computeLetterParams
       exportUtils.js                # Exportacion ZIP con JSZip
-      fontParser.js                 # Parsing opcional de fuente de referencia (solo guia visual)
-      pathSampler.js                # LEGACY — no se importa en ninguna parte de la app actual
+      fontParser.js                 # LEGACY — no se importa
+      pathSampler.js                # LEGACY — no se importa
 ```
 
 ## Flujo de la Aplicacion
 
-### GeneratorPage - Wizard de 4 Pasos
+### GeneratorPage - Wizard de 3 Pasos
 
-**Paso 1: Inicio** - Introduccion + carga opcional de fuente de referencia. La fuente solo sirve como guia visual al dibujar (y para generar `letter-fill.svg`/`letter-outline.svg`). Boton "Siguiente".
+**Paso 1: Tipo, letra e imagen** - Elegir entre "ligada" o "mayusculas", seleccionar **una sola letra** del grid (seleccion exclusiva — click en otra la reemplaza), y subir la imagen de referencia para esa letra. Se aceptan `.svg`, `.png`, `.jpg`. El uso recomendado es un SVG ilustrado con la letra + la linea punteada guia + el personaje; el extractor identifica automaticamente los puntos guia. El abecedario tiene 27 letras (a-z + ñ) + ch + ll.
 
-**Paso 2: Seleccionar tipo y letras** - Elegir entre "ligada" o "mayusculas", y seleccionar **una sola letra** del grid (la seleccion es exclusiva — hacer click en otra letra reemplaza la seleccion actual). El abecedario incluye 27 letras (a-z + ñ) + ch + ll.
+**Paso 2: Dibujar trazado** - Config (canvas w/h, dotCount, dotSize, strokeWidth, parametros del dotted-svg) + `ManualPathDrawer` con la imagen de referencia de fondo. El usuario dibuja libre; al soltar el boton del mouse el trazo se proyecta sobre la polilinea extraida del SVG (o sobre el eje medial si el input era raster). Tick ✓ junto al titulo cuando hay trazado guardado. Boton "Generar y continuar" -> paso 3.
 
-**Paso 3: Configurar y generar** - Parametros configurables (todos siempre habilitados):
-- Ancho/alto del canvas (default 380 × 340)
-- Cantidad de puntos por trazo — `dotCount` (controla cuantos puntos se muestrean al finalizar el dibujo)
-- `dotSize` — tamaño visual del punto. `0` = auto via `computeLetterParams`. `>0` = forzado
-- `animationPathStroke` — grosor del trazo. `0` = auto via `computeLetterParams`. `>0` = forzado
-
-Bajo la config aparece directamente el `ManualPathDrawer` con la letra elegida en Step 2 (como solo se permite una letra a la vez, no hay tabs ni selector). Se dibuja el recorrido de cada trazo con el cursor; un tick ✓ junto al titulo indica que ya hay un trazado guardado para esa letra. Boton "Generar" pasa al paso 4.
-
-**Paso 4: Assets y exportacion** - Lista de trazados generados mostrando valores computados por letra (canvas, dotSize, stroke, cantidad de trazos, puntos por trazo). Botones: `Preview` (navega a `/preview`), `Exportar` (ZIP individual), `Exportar todos como ZIP` (ZIP masivo). No hay uploads de assets — `thum.png` se genera automaticamente y ya no se incluyen `character.png`, `fondo.png` ni audios.
+**Paso 3: Exportar** - Lista de trazados generados con valores computados (canvas, dotSize, stroke, cantidad de trazos, puntos por trazo). Botones: `Preview` (navega a `/preview`), `Exportar` (ZIP individual), `Exportar todos como ZIP` (ZIP masivo). `thum.png` se genera al exportar; no hay uploads de assets ni `character.png`/`fondo.png`/audios.
 
 ### Valores Dinamicos
 
@@ -96,7 +92,7 @@ Solo `dotSize` y `animationPathStroke` se calculan dinamicamente (via `computeLe
 
 ### Persistencia de Estado
 
-El estado del generador se persiste en `window.__generatorState` en un `useEffect` sin dependencias (se ejecuta cada render) para sobrevivir a la navegacion a Preview y de vuelta. El paso actual se lee/escribe en el URL param `?step=N`. El preview recibe datos via `window.__trazadoPreview`.
+El estado del generador (incluyendo la imagen cargada por letra en `images`) se persiste en `window.__generatorState` en un `useEffect` sin dependencias (se ejecuta cada render) para sobrevivir a la navegacion a Preview y de vuelta. El paso actual se lee/escribe en el URL param `?step=N`. El preview recibe datos via `window.__trazadoPreview`.
 
 ### PreviewPage - Preview Interactivo
 

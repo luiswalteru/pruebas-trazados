@@ -27,35 +27,49 @@ npx vite build --outDir /tmp/trazados-dist
 
 ## Architecture
 
-### Manual-only (April 2026 refactor)
+### Manual drawing over an SVG reference scene
 
-**The app only supports hand-drawing letter paths with the cursor.** Older versions supported `font` (opentype.js glyph skeletonization) and `svg` (upload fill/outline/dotted SVGs) modes. Both were removed: the `mode` state is gone, `src/utils/pathSampler.js` is no longer imported anywhere, and `fontParser.js` only serves the optional reference-font guide.
+The app is manual-only. The user uploads one reference image per letter (recommended: an `.svg` illustration that contains the letter body, the dotted tracing guide, and decorative character art — see `ejemplo/trazado-letra-a/a_correct.svg`) and hand-draws the tracing path over it. Raster images (PNG/JPG) still work as a fallback.
 
-A loaded reference font has three effects and three effects only:
-1. Shows a faint guide under the drawing canvas (8% fill / 20% outline opacity).
-2. Provides the real glyph path for `letter-fill.svg` / `letter-outline.svg` in the export (otherwise the export falls back to thickened user strokes via `generateFillSvgFromStrokes` / `generateOutlineSvgFromStrokes`).
-3. Builds the binary mask used by `snapToCenterline` to pull the user's cursor toward the letter's medial axis while drawing.
+Older versions supported `font` (opentype.js skeletonization) and `svg-bundle` (upload fill/outline/dotted SVGs) modes. Both are gone — `src/utils/pathSampler.js` and most of `src/utils/fontParser.js` are dead code retained only as reference.
+
+A loaded reference image has these effects:
+1. Rendered under the drawing canvas as a visual guide (40% opacity).
+2. If the file is SVG: passed through `guideExtractor.extractGuideMaskFromImage`, which rasterizes it at 2× canvas resolution, thresholds dark low-saturation pixels (excluding the character's vivid colors), runs 8-connectivity flood-fill to find blobs, discards the 3 largest (letter body + character silhouettes) and the excessively small ones, keeps the rest as "guide dots", and builds a polyline from their centroids (K=2 nearest neighbors with a ~2.5× median distance cap). That polyline is what drawn strokes snap to.
+3. If the file is raster (PNG/JPG) or SVG extraction fails (fewer than 3 dots detected): falls back to `buildMaskFromImage`, a plain dark-pixel mask + distance transform — same as the pre-SVG flow.
 
 ### Route layout
 
 SPA with 3 routes (`react-router-dom` v6):
-- `/` — `HomePage` (3 feature cards, emphasizing manual drawing)
-- `/generator` — `GeneratorPage` (4-step wizard)
+- `/` — `HomePage` (minimal landing with a single "Comenzar a Generar" link)
+- `/generator` — `GeneratorPage` (3-step wizard: imagen → trazado → exportar)
 - `/preview` — `PreviewPage` (interactive preview that simulates the downstream player)
 
 All styling lives in a single `src/App.css`. No CSS modules.
 
-### The drawing pipeline
+### The drawing pipeline (deferred snap)
 
-`ManualPathDrawer` is where the magic happens. Every cursor sample runs through this **real-time** pipeline before being stored:
+`ManualPathDrawer` lets the user draw freely with the cursor. **The snap to the dotted guide runs once, on mouse release** — not per-sample. This was a deliberate change: per-sample snapping felt fought the user and occasionally teleported onto the wrong side of a cursive-letter loop.
 
-1. **EMA toward raw pointer** (`SMOOTH_ALPHA = 0.5`) — low-pass filter against hand jitter.
+Realtime (during drawing):
+1. **EMA toward raw pointer** (`SMOOTH_ALPHA = 0.5`) — low-pass against hand jitter.
 2. **Minimum-distance gate** (~1.2 px) — don't oversample.
-3. **`snapToCenterline`** (`src/utils/letterMask.js`) — pulls the point toward the letter's medial axis using the **gradient of the distance transform** computed from the fill SVG's binary mask. The gradient points away from the nearest boundary (i.e., toward the skeleton) and its magnitude is ~0 at the skeleton, so the correction naturally fades out when the point is already centered. This is radial and direction-independent — do not replace it with travel-direction-based snapping.
+3. Store point as-is. No snap, no mask lookup.
 
-If no reference font is loaded, `fillSvg` is empty, `buildLetterMask` yields `null`, and `snapToCenterline` is a no-op. Steps 1 & 2 still apply.
+On `endStroke`:
+- `adjustStrokeToGuide(points)` decides which adjuster to run based on the guide mode:
+  - **`svg-dots`** (polyline available): `projectStrokeOnGuide(points, guide)` — snaps the first point to the nearest polyline endpoint if one is within 50 px, projects every subsequent point onto the nearest polyline segment with a **direction-aware lateral bias** (see below), snaps the last point to an endpoint if close, and runs two passes of neighbour-averaging to clean up sample-to-sample segment-switch jitter.
+  - **`fallback`** (raster mask, no polyline): `centerStrokePoints(points, maskInfo)` — the legacy iterative distance-transform pull.
+  - **`none`** (no guide at all): stroke stored as-is.
 
-At finalize time (`handleFinalize`): for each stroke, `resample` to `dotCount` equidistant points, mark corners (angle delta > π/4), `toFixed(3)` coords, `toFixed(0)` on the first point for the `dragger`. `strokePaths` are built separately with a lighter `smooth(_, 2)` for the (now-unused) dotted-SVG fallback and for the `thum.png` generator.
+**Direction-aware lateral bias** in `snapToPolyline` is the key to staying on the correct side when the polyline folds near itself (cursive "a", etc.):
+- Motion direction is estimated from the **raw cursor path** (not the already-projected history — otherwise a single mis-projection becomes a feedback loop).
+- Walk backwards through `rawHistory` accumulating arc length until ≥15 px; use that span's tangent.
+- Score for a candidate projection = `d²(proj, cursor) + 2.5·lateral² + 0.4·max(0,−forward)²`, where forward/lateral are decomposed relative to the tip's direction. Forward motion is free; sideways jumps across the letter's body are heavily penalised.
+
+At finalize time (`handleFinalize`): for each already-adjusted stroke, `resample` to `dotCount` equidistant points, mark corners (angle delta > π/4), `toFixed(3)` coords, `toFixed(0)` on the first point for the `dragger`. `strokePaths` are built separately with a lighter `smooth(_, 2)` for `letter-dotted.svg` and `thum.png`.
+
+The "Ver guía" toggle in the drawer overlays the detected guide (cyan edges, dark-teal dots, orange endpoints) — useful when the segmentation misses points or includes too many; there is no fine-grained slider UI yet, so tuning means editing the defaults in `guideExtractor.js`.
 
 ### `letter-dotted.svg` contract
 
@@ -129,6 +143,6 @@ In Step 2 the user can only pick **one letter at a time** (`toggleLetter` clears
 
 ## Known dead code
 
-- **`src/utils/pathSampler.js`** is no longer imported anywhere. Kept in the repo as reference (Zhang-Suen thinning, junction detection, colinear merge, smoothing, resample, Bezier path construction) in case the font-mode flow is reintroduced. Safe to delete if definitively abandoned.
-- **`computeGlyphCanvasSize`** and **`getAvailableChars`** in `fontParser.js`: unused.
+- **`src/utils/pathSampler.js`** is no longer imported anywhere. Kept as reference (Zhang-Suen thinning, junction detection, colinear merge, resample, Bezier path construction).
+- **`src/utils/fontParser.js`** is no longer imported anywhere either — the old reference-font flow is gone entirely. Kept only as reference.
 - **`computeDotCount`** in `dataGenerator.js`: exported but no longer called by the UI (the manual drawer uses a fixed user-configured `dotCount` for all strokes).
