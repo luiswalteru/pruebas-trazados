@@ -148,6 +148,15 @@ export async function extractGuideMaskFromImage(imageSrc, width, height, opts = 
   // strokes or to isolated dots like the one on an "i").
   const edges = buildGuideEdges(centroids, { k: 2, distFactor: 2.5 })
 
+  // Degree-1 vertices are the polyline's endpoints — used on stroke start to
+  // disambiguate which end of a loop the user wants to begin at.
+  const degree = new Int32Array(centroids.length)
+  for (const { a, b } of edges) { degree[a]++; degree[b]++ }
+  const endpoints = []
+  for (let i = 0; i < degree.length; i++) {
+    if (degree[i] === 1) endpoints.push(i)
+  }
+
   return {
     mask: dilated,
     dist,
@@ -155,7 +164,8 @@ export async function extractGuideMaskFromImage(imageSrc, width, height, opts = 
     height,
     centroids,
     edges,
-    debug: { dotCount: kept.length, centroids, edges },
+    endpoints,
+    debug: { dotCount: kept.length, centroids, edges, endpoints },
   }
 }
 
@@ -200,34 +210,195 @@ function buildGuideEdges(centroids, { k = 2, distFactor = 2.5 } = {}) {
 }
 
 /**
- * Snap a point onto the nearest guide-polyline segment.
+ * Snap a point onto the nearest guide-polyline segment, biased by recent
+ * stroke history so the snap doesn't teleport to a spatially-close but
+ * topologically-far part of the polyline (e.g. the opposite side of the
+ * loop in a cursive "a").
  *
- * `centroids` are the dot centers, `edges` are {a,b} index pairs defining
- * line segments between them. The point is projected onto every segment
- * and the closest projection is returned — provided it's within `maxDist`.
- * Outside that radius the original point is returned unchanged (so clicks
- * way off the letter don't teleport to the guide).
+ * Two biasing modes:
+ *   • With `history` (≥2 points): use the averaged direction of the last
+ *     few steps to penalise the **lateral** (perpendicular-to-motion) part
+ *     of (proj − tip). Forward motion is free; sideways jumps are costly.
+ *     Backward motion gets a mild penalty so the snap doesn't reverse
+ *     direction spuriously.
+ *   • With only `prev` (or history length 1): penalise (proj − prev)²
+ *     isotropically with `continuityBias`.
+ *
+ * @param {{x:number,y:number}} point
+ * @param {Array<{x:number,y:number}>} centroids
+ * @param {Array<{a:number,b:number}>} edges
+ * @param {Object} [opts]
+ * @param {number} [opts.maxDist=80]
+ * @param {{x:number,y:number}} [opts.prev]
+ * @param {Array<{x:number,y:number}>} [opts.history]     projected points so far (for prev ref)
+ * @param {Array<{x:number,y:number}>} [opts.rawHistory]  raw cursor path (for direction estimate)
+ * @param {number} [opts.lateralBias=2.5]   weight of lateral² penalty
+ * @param {number} [opts.backwardPenalty=0.4] weight on negative-forward² penalty
+ * @param {number} [opts.continuityBias=0.3]  fallback weight when no direction is available
+ * @param {number} [opts.dirLookback=15]    accumulated arc-length (px) to span when estimating direction
  */
 export function snapToPolyline(point, centroids, edges, opts = {}) {
   if (!centroids || centroids.length === 0 || !edges || edges.length === 0) {
     return { x: point.x, y: point.y }
   }
-  const maxDist = opts.maxDist ?? 80
-  const maxD2 = maxDist * maxDist
-  let bestD2 = Infinity
+  const maxDist          = opts.maxDist ?? 80
+  const maxD2            = maxDist * maxDist
+  const history          = opts.history
+  const rawHistory       = opts.rawHistory
+  const prev             = opts.prev || (history && history.length > 0 ? history[history.length - 1] : null)
+  const lateralBias      = opts.lateralBias ?? 2.5
+  const backwardPenalty  = opts.backwardPenalty ?? 0.4
+  const continuityBias   = opts.continuityBias ?? 0.3
+  const dirLookback      = opts.dirLookback ?? 15
+
+  // Motion direction. Prefer the raw cursor path (the user's intent) over
+  // the already-projected history, since a previous mis-projection onto the
+  // wrong side of a loop would otherwise skew the direction and keep us on
+  // the wrong side by feedback. Walks back along the path until ~dirLookback
+  // px of cumulative distance so slow/dense sampling doesn't give a near-
+  // zero, unreliable direction.
+  let dxh = 0, dyh = 0, hasDir = false
+  const dirSource = (rawHistory && rawHistory.length >= 2) ? rawHistory : history
+  if (dirSource && dirSource.length >= 2) {
+    const tip = dirSource[dirSource.length - 1]
+    let back = tip
+    let acc = 0
+    for (let i = dirSource.length - 2; i >= 0; i--) {
+      acc += Math.hypot(back.x - dirSource[i].x, back.y - dirSource[i].y)
+      back = dirSource[i]
+      if (acc >= dirLookback) break
+    }
+    const dx = tip.x - back.x, dy = tip.y - back.y
+    const len = Math.hypot(dx, dy)
+    if (len > 1) { dxh = dx / len; dyh = dy / len; hasDir = true }
+  }
+
+  let bestScore = Infinity
   let best = null
   for (const e of edges) {
     const A = centroids[e.a]
     const B = centroids[e.b]
     if (!A || !B) continue
     const proj = projectPointOnSegment(point, A, B)
-    const dx = proj.x - point.x
-    const dy = proj.y - point.y
-    const d2 = dx * dx + dy * dy
-    if (d2 < bestD2) { bestD2 = d2; best = proj }
+    const ex = proj.x - point.x
+    const ey = proj.y - point.y
+    const d2 = ex * ex + ey * ey
+    if (d2 > maxD2) continue
+
+    let score = d2
+    if (hasDir && prev) {
+      const rx = proj.x - prev.x
+      const ry = proj.y - prev.y
+      const forward = rx * dxh + ry * dyh
+      const latX = rx - forward * dxh
+      const latY = ry - forward * dyh
+      score += lateralBias * (latX * latX + latY * latY)
+      if (forward < 0) score += backwardPenalty * forward * forward
+    } else if (prev) {
+      const px = proj.x - prev.x
+      const py = proj.y - prev.y
+      score += continuityBias * (px * px + py * py)
+    }
+    if (score < bestScore) { bestScore = score; best = proj }
   }
-  if (!best || bestD2 > maxD2) return { x: point.x, y: point.y }
+  if (!best) return { x: point.x, y: point.y }
   return best
+}
+
+/**
+ * Snap to the nearest polyline endpoint (degree-1 centroid). Used on stroke
+ * start so the stroke begins where the guide begins/ends, not in the middle
+ * of a segment that may be spatially close but topologically far away.
+ * Returns null if no endpoint is within `maxDist`.
+ */
+export function snapToEndpoint(point, centroids, endpoints, opts = {}) {
+  if (!centroids || !endpoints || endpoints.length === 0) return null
+  const maxDist = opts.maxDist ?? 40
+  const maxD2 = maxDist * maxDist
+  let best = null
+  let bestD2 = Infinity
+  for (const idx of endpoints) {
+    const c = centroids[idx]
+    if (!c) continue
+    const dx = c.x - point.x
+    const dy = c.y - point.y
+    const d2 = dx * dx + dy * dy
+    if (d2 < bestD2) { bestD2 = d2; best = c }
+  }
+  if (!best || bestD2 > maxD2) return null
+  return { x: best.x, y: best.y }
+}
+
+/**
+ * Project an entire stroke (array of raw points) onto the guide polyline.
+ * The first point tries to snap to a polyline endpoint; the rest are
+ * projected with a direction-aware bias built from the already-projected
+ * points, so the resulting stroke stays on one side of a loop instead of
+ * jumping across when the cursor drifted inward.
+ *
+ * A light "no backtracking" smoothing pass runs at the end: each point is
+ * pulled toward the average of its neighbours to remove small oscillations
+ * left by sample-to-sample projection switching.
+ */
+export function projectStrokeOnGuide(points, guide, opts = {}) {
+  if (!guide || !guide.edges || guide.edges.length === 0) return points
+  if (!points || points.length < 2) return points
+  const { centroids, edges, endpoints } = guide
+  const endpointRadius = opts.endpointRadius ?? 50
+  const maxDist        = opts.maxDist        ?? 120
+
+  const out = []
+
+  // First point: snap to the nearest polyline endpoint if one is close,
+  // otherwise free projection.
+  const first = points[0]
+  let firstProj = null
+  if (endpoints && endpoints.length > 0) {
+    firstProj = snapToEndpoint(first, centroids, endpoints, { maxDist: endpointRadius })
+  }
+  if (!firstProj) {
+    firstProj = snapToPolyline(first, centroids, edges, { maxDist })
+  }
+  out.push(firstProj)
+
+  // Subsequent points: direction from the raw cursor path (user intent),
+  // prev ref from the projected history. A past mis-projection can't drag
+  // the estimator into a feedback loop this way.
+  for (let i = 1; i < points.length; i++) {
+    const history = out.slice(-5)
+    const rawHistory = points.slice(Math.max(0, i - 10), i + 1)
+    const proj = snapToPolyline(points[i], centroids, edges, { history, rawHistory, maxDist })
+    out.push(proj)
+  }
+
+  // Last point: also snap to endpoint if close, so strokes that end at a
+  // polyline extreme land cleanly on it.
+  if (endpoints && endpoints.length > 0 && out.length >= 2) {
+    const lastRaw = points[points.length - 1]
+    const lastEp = snapToEndpoint(lastRaw, centroids, endpoints, { maxDist: endpointRadius })
+    if (lastEp) out[out.length - 1] = lastEp
+  }
+
+  // Light neighbour-averaging to smooth out tiny sample-to-sample jitter
+  // introduced when consecutive projections fall on different segments.
+  return smoothAlongLine(out, 2)
+}
+
+function smoothAlongLine(pts, iterations) {
+  if (pts.length < 3 || iterations <= 0) return pts
+  let cur = pts.map(p => ({ x: p.x, y: p.y }))
+  for (let it = 0; it < iterations; it++) {
+    const next = [cur[0]]
+    for (let i = 1; i < cur.length - 1; i++) {
+      next.push({
+        x: cur[i - 1].x * 0.25 + cur[i].x * 0.5 + cur[i + 1].x * 0.25,
+        y: cur[i - 1].y * 0.25 + cur[i].y * 0.5 + cur[i + 1].y * 0.25,
+      })
+    }
+    next.push(cur[cur.length - 1])
+    cur = next
+  }
+  return cur
 }
 
 function projectPointOnSegment(p, A, B) {

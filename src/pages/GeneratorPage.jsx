@@ -391,9 +391,10 @@ export default function GeneratorPage() {
                 {manualDrawings[activeLetter] && ' ✓'}
               </h3>
               <p className="info-text">
-                Haz click y arrastra para cada trazo, siguiendo la línea punteada de la imagen.
-                Suelta el mouse para terminar un trazo y haz click de nuevo para empezar otro.
-                El orden en que dibujes define la secuencia de los trazados.
+                Haz click y arrastra para cada trazo siguiendo la línea punteada.
+                Dibuja con libertad: al soltar el mouse el trazo se ajusta
+                automáticamente sobre la guía. Haz click de nuevo para empezar
+                otro trazo. El orden define la secuencia de los trazados.
               </p>
 
               <ManualPathDrawer

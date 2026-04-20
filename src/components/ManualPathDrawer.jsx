@@ -1,6 +1,10 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { buildMaskFromImage, snapToCenterline, centerStrokePoints } from '../utils/letterMask'
-import { extractGuideMaskFromImage, isSvgSource, snapToPolyline } from '../utils/guideExtractor'
+import { buildMaskFromImage, centerStrokePoints } from '../utils/letterMask'
+import {
+  extractGuideMaskFromImage,
+  isSvgSource,
+  projectStrokeOnGuide,
+} from '../utils/guideExtractor'
 
 /**
  * ManualPathDrawer
@@ -58,14 +62,22 @@ export default function ManualPathDrawer({
   const [showGuideDebug, setShowGuideDebug] = useState(false)
   const [maskMode, setMaskMode] = useState('none')     // 'svg-dots' | 'fallback' | 'none'
 
-  // Unified snap: projects to the guide polyline when available, otherwise
-  // falls back to the legacy distance-transform pull on the raster mask.
-  const snapPoint = useCallback((p) => {
+  // Project a just-finished stroke onto the guide. Runs on mouse release
+  // (endStroke) and when the user clicks "Centrar trazado". The raw drawing
+  // is kept untouched during motion so the cursor feels free; the adjustment
+  // happens once we have the full trajectory.
+  //   • SVG guide with polyline → project each point with direction-aware bias.
+  //   • Raster-only (PNG/JPG fallback) → iterative distance-transform snap.
+  //   • No guide at all → leave the stroke as-is.
+  const adjustStrokeToGuide = useCallback((points) => {
     const g = guideRef.current
     if (g && g.edges && g.edges.length > 0) {
-      return snapToPolyline(p, g.centroids, g.edges)
+      return projectStrokeOnGuide(points, g)
     }
-    return snapToCenterline(p, maskRef.current)
+    if (maskRef.current) {
+      return centerStrokePoints(points, maskRef.current)
+    }
+    return points
   }, [])
 
   const displayLetter = type === 'mayusculas' ? letter.toUpperCase() : letter.toLowerCase()
@@ -132,10 +144,9 @@ export default function ManualPathDrawer({
   const startStroke = useCallback((clientX, clientY) => {
     const raw = toLetterCoords(clientX, clientY)
     if (!raw) return
-    const snapped = snapPoint(raw)
     setIsDrawing(true)
-    setCurrentStroke([snapped])
-  }, [toLetterCoords, snapPoint])
+    setCurrentStroke([raw])
+  }, [toLetterCoords])
 
   const continueStroke = useCallback((clientX, clientY) => {
     if (!isDrawing) {
@@ -148,32 +159,28 @@ export default function ManualPathDrawer({
     setCursorPos(raw)
     setCurrentStroke(prev => {
       const last = prev[prev.length - 1]
-      if (!last) return [snapPoint(raw)]
+      if (!last) return [raw]
 
-      // EMA input smoothing toward the raw pointer — removes hand jitter
+      // EMA input smoothing toward the raw pointer — removes hand jitter.
+      // No guide snap here: the stroke follows the cursor freely during
+      // motion; the snap to the dotted-guide polyline runs in endStroke.
       const smoothX = last.x + (raw.x - last.x) * SMOOTH_ALPHA
       const smoothY = last.y + (raw.y - last.y) * SMOOTH_ALPHA
 
-      // Skip tiny movements so we don't overfit to cursor jitter
       if (Math.hypot(smoothX - last.x, smoothY - last.y) < 1.2) return prev
-
-      // Snap the smoothed point onto the guide: with SVG guide available,
-      // this projects onto the nearest polyline segment, so the stroke
-      // stays exactly on the dotted line rather than cutting chords between
-      // discrete dots. Falls back to the distance-field pull otherwise.
-      const snapped = snapPoint({ x: smoothX, y: smoothY })
-      return [...prev, snapped]
+      return [...prev, { x: smoothX, y: smoothY }]
     })
-  }, [isDrawing, toLetterCoords, snapPoint])
+  }, [isDrawing, toLetterCoords])
 
   const endStroke = useCallback(() => {
     if (!isDrawing) return
     setIsDrawing(false)
     if (currentStroke.length >= 2) {
-      setStrokes(prev => [...prev, currentStroke])
+      const adjusted = adjustStrokeToGuide(currentStroke)
+      setStrokes(prev => [...prev, adjusted])
     }
     setCurrentStroke([])
-  }, [isDrawing, currentStroke])
+  }, [isDrawing, currentStroke, adjustStrokeToGuide])
 
   // ---- Mouse events ---------------------------------------------------------
   const onMouseDown = useCallback((e) => {
@@ -245,18 +252,21 @@ export default function ManualPathDrawer({
     setIsDrawing(false)
   }, [])
 
-  // ---- Center finished strokes on the letter body ---------------------------
-  // Runs after the user has drawn all strokes. Applies a heavy post-process
-  // pass (smooth → iterative snap-to-centerline → smooth) to remove tremor
-  // and pull each stroke onto the letter's medial axis. Replaces `strokes`
-  // in place so the result is visible on the canvas before saving.
+  // ---- Re-project all strokes onto the guide --------------------------------
+  // Manually re-runs the same projection that endStroke does, in case the
+  // user wants to redo the adjustment (e.g. after editing or if the initial
+  // projection looked off). Falls back to the legacy centerline pull when
+  // there's no polyline guide (raster-only case).
   const centerStrokes = useCallback(() => {
-    // Commit any in-progress stroke first so it's included.
     let allStrokes = [...strokes]
     if (currentStroke.length >= 2) allStrokes.push(currentStroke)
     if (allStrokes.length === 0) return
 
-    const centered = allStrokes.map(s => centerStrokePoints(s, maskRef.current))
+    const g = guideRef.current
+    const hasPolyline = g && g.edges && g.edges.length > 0
+    const centered = allStrokes.map(s => hasPolyline
+      ? projectStrokeOnGuide(s, g)
+      : centerStrokePoints(s, maskRef.current))
     setStrokes(centered)
     setCurrentStroke([])
     setIsDrawing(false)
@@ -364,12 +374,12 @@ export default function ManualPathDrawer({
         <span><kbd>Esc</kbd> limpiar</span>
         {maskMode === 'svg-dots' && (
           <span style={{ color: '#2e7d32' }}>
-            Guía SVG detectada ({guideDebug?.dotCount} puntos)
+            Ajuste al soltar: guía SVG ({guideDebug?.dotCount} puntos)
           </span>
         )}
         {maskMode === 'fallback' && (
           <span style={{ color: '#e65100' }}>
-            Guía por imagen (fallback)
+            Ajuste al soltar: centrado por imagen
           </span>
         )}
       </div>
@@ -482,11 +492,17 @@ export default function ManualPathDrawer({
                     />
                   )
                 })}
-                {guideDebug.centroids.map((c, i) => (
-                  <circle key={`dbg-${i}`} cx={c.x} cy={c.y} r="2"
-                    fill="#006064"
-                  />
-                ))}
+                {guideDebug.centroids.map((c, i) => {
+                  const isEndpoint = guideDebug.endpoints?.includes(i)
+                  return (
+                    <circle key={`dbg-${i}`} cx={c.x} cy={c.y}
+                      r={isEndpoint ? 4 : 2}
+                      fill={isEndpoint ? '#ff6f00' : '#006064'}
+                      stroke={isEndpoint ? '#fff' : 'none'}
+                      strokeWidth={isEndpoint ? 1 : 0}
+                    />
+                  )
+                })}
               </g>
             )}
 
