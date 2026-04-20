@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { buildMaskFromImage, snapToCenterline, centerStrokePoints } from '../utils/letterMask'
+import { extractGuideMaskFromImage, isSvgSource, snapToPolyline } from '../utils/guideExtractor'
 
 /**
  * ManualPathDrawer
@@ -49,18 +50,63 @@ export default function ManualPathDrawer({
   const [currentStroke, setCurrentStroke] = useState([]) // points of the stroke being drawn
   const [cursorPos, setCursorPos] = useState(null)
   const maskRef = useRef(null)                         // rasterized letter mask for center-snapping
+  const guideRef = useRef(null)                        // { centroids, edges } for polyline snap
+  // Debug state for the SVG guide extractor — lets us see which blobs were
+  // classified as guide dots so thresholds can be tuned if the segmentation
+  // misses or over-picks.
+  const [guideDebug, setGuideDebug] = useState(null)   // { dotCount, centroids, edges } | null
+  const [showGuideDebug, setShowGuideDebug] = useState(false)
+  const [maskMode, setMaskMode] = useState('none')     // 'svg-dots' | 'fallback' | 'none'
+
+  // Unified snap: projects to the guide polyline when available, otherwise
+  // falls back to the legacy distance-transform pull on the raster mask.
+  const snapPoint = useCallback((p) => {
+    const g = guideRef.current
+    if (g && g.edges && g.edges.length > 0) {
+      return snapToPolyline(p, g.centroids, g.edges)
+    }
+    return snapToCenterline(p, maskRef.current)
+  }, [])
 
   const displayLetter = type === 'mayusculas' ? letter.toUpperCase() : letter.toLowerCase()
 
-  // Build the letter mask when the reference image changes so drawn points
-  // can be snapped to the centerline of the letter.
+  // Build the mask when the reference image changes so drawn points can snap
+  // to the centerline. For SVG inputs (full-scene illustrations with a
+  // character) we extract just the dotted-guide blobs; for raster inputs or
+  // when extraction fails we fall back to the raw dark-pixel mask.
   useEffect(() => {
     let cancelled = false
     maskRef.current = null
+    guideRef.current = null
+    setGuideDebug(null)
+    setMaskMode('none')
     if (!imageSrc) return
-    buildMaskFromImage(imageSrc, width, height)
-      .then(mask => { if (!cancelled) maskRef.current = mask })
-      .catch(() => { maskRef.current = null })
+
+    const run = async () => {
+      if (isSvgSource(imageSrc)) {
+        try {
+          const guide = await extractGuideMaskFromImage(imageSrc, width, height)
+          if (cancelled) return
+          if (guide && guide.debug.dotCount >= 3 && guide.edges.length > 0) {
+            maskRef.current = guide
+            guideRef.current = { centroids: guide.centroids, edges: guide.edges }
+            setGuideDebug(guide.debug)
+            setMaskMode('svg-dots')
+            return
+          }
+        } catch (_) { /* fall through to raster fallback */ }
+      }
+      try {
+        const mask = await buildMaskFromImage(imageSrc, width, height)
+        if (cancelled) return
+        maskRef.current = mask
+        setMaskMode('fallback')
+      } catch (_) {
+        if (!cancelled) { maskRef.current = null; setMaskMode('none') }
+      }
+    }
+    run()
+
     return () => { cancelled = true }
   }, [imageSrc, width, height])
 
@@ -86,10 +132,10 @@ export default function ManualPathDrawer({
   const startStroke = useCallback((clientX, clientY) => {
     const raw = toLetterCoords(clientX, clientY)
     if (!raw) return
-    const snapped = snapToCenterline(raw, maskRef.current)
+    const snapped = snapPoint(raw)
     setIsDrawing(true)
     setCurrentStroke([snapped])
-  }, [toLetterCoords])
+  }, [toLetterCoords, snapPoint])
 
   const continueStroke = useCallback((clientX, clientY) => {
     if (!isDrawing) {
@@ -102,7 +148,7 @@ export default function ManualPathDrawer({
     setCursorPos(raw)
     setCurrentStroke(prev => {
       const last = prev[prev.length - 1]
-      if (!last) return [snapToCenterline(raw, maskRef.current)]
+      if (!last) return [snapPoint(raw)]
 
       // EMA input smoothing toward the raw pointer — removes hand jitter
       const smoothX = last.x + (raw.x - last.x) * SMOOTH_ALPHA
@@ -111,12 +157,14 @@ export default function ManualPathDrawer({
       // Skip tiny movements so we don't overfit to cursor jitter
       if (Math.hypot(smoothX - last.x, smoothY - last.y) < 1.2) return prev
 
-      // Pull the smoothed point toward the letter's medial axis using the
-      // precomputed distance-field gradient (radial, always stable).
-      const snapped = snapToCenterline({ x: smoothX, y: smoothY }, maskRef.current)
+      // Snap the smoothed point onto the guide: with SVG guide available,
+      // this projects onto the nearest polyline segment, so the stroke
+      // stays exactly on the dotted line rather than cutting chords between
+      // discrete dots. Falls back to the distance-field pull otherwise.
+      const snapped = snapPoint({ x: smoothX, y: smoothY })
       return [...prev, snapped]
     })
-  }, [isDrawing, toLetterCoords])
+  }, [isDrawing, toLetterCoords, snapPoint])
 
   const endStroke = useCallback(() => {
     if (!isDrawing) return
@@ -291,6 +339,15 @@ export default function ManualPathDrawer({
           >
             Guardar (Enter)
           </button>
+          {guideDebug && (
+            <button
+              className="btn btn-sm"
+              onClick={() => setShowGuideDebug(v => !v)}
+              title="Muestra los puntos guía detectados en el SVG"
+            >
+              {showGuideDebug ? 'Ocultar guía' : 'Ver guía'}
+            </button>
+          )}
           {onCancel && (
             <button className="btn btn-sm btn-secondary" onClick={onCancel}>Cancelar</button>
           )}
@@ -305,7 +362,16 @@ export default function ManualPathDrawer({
         <span><kbd>Ctrl+Z</kbd> deshacer</span>
         <span><kbd>Enter</kbd> guardar</span>
         <span><kbd>Esc</kbd> limpiar</span>
-        {imageSrc && <span style={{ color: '#2e7d32' }}>Auto-centrado activo</span>}
+        {maskMode === 'svg-dots' && (
+          <span style={{ color: '#2e7d32' }}>
+            Guía SVG detectada ({guideDebug?.dotCount} puntos)
+          </span>
+        )}
+        {maskMode === 'fallback' && (
+          <span style={{ color: '#e65100' }}>
+            Guía por imagen (fallback)
+          </span>
+        )}
       </div>
 
       {/* Canvas */}
@@ -399,6 +465,28 @@ export default function ManualPathDrawer({
                 <circle cx={currentStroke[0].x} cy={currentStroke[0].y} r="5"
                   fill="#2196F3" stroke="#fff" strokeWidth="1.5"
                 />
+              </g>
+            )}
+
+            {/* Debug: detected guide polyline — edges the snap projects onto */}
+            {showGuideDebug && guideDebug && guideDebug.edges && (
+              <g opacity="0.75">
+                {guideDebug.edges.map((e, i) => {
+                  const A = guideDebug.centroids[e.a]
+                  const B = guideDebug.centroids[e.b]
+                  if (!A || !B) return null
+                  return (
+                    <line key={`eg-${i}`}
+                      x1={A.x} y1={A.y} x2={B.x} y2={B.y}
+                      stroke="#00bcd4" strokeWidth="1.5"
+                    />
+                  )
+                })}
+                {guideDebug.centroids.map((c, i) => (
+                  <circle key={`dbg-${i}`} cx={c.x} cy={c.y} r="2"
+                    fill="#006064"
+                  />
+                ))}
               </g>
             )}
 

@@ -290,15 +290,15 @@ export default function GeneratorPage() {
             {activeLetter && (
               <>
                 <p style={{ fontSize: '0.85rem', color: '#666', marginBottom: 12 }}>
-                  Carga la imagen (PNG, JPG o JPEG) que contiene la línea punteada
-                  por donde debe ir el trazado. Se usará como guía al dibujar y
-                  para ajustar el trazo al centro de la línea.
+                  Carga el SVG (o PNG/JPG) con la letra y la línea punteada.
+                  Si es SVG, se extraen automáticamente los puntos guía para
+                  ajustar el trazo al centro de la línea.
                 </p>
                 <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', flexWrap: 'wrap' }}>
                   <input
                     ref={imageInputRef}
                     type="file"
-                    accept=".png,.jpg,.jpeg,image/png,image/jpeg"
+                    accept=".svg,.png,.jpg,.jpeg,image/svg+xml,image/png,image/jpeg"
                     onChange={handleImageUpload}
                     style={{ display: 'none' }}
                   />

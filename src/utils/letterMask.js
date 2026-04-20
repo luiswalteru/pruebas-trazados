@@ -78,7 +78,7 @@ function isInside(maskInfo, x, y) {
  * step ≈ 1 px). Outside pixels get distance 0; inside pixels get the distance
  * in pixels to the nearest outside pixel.
  */
-function computeDistanceTransform(mask, width, height) {
+export function computeDistanceTransform(mask, width, height) {
   const N = width * height;
   const dist = new Float32Array(N);
   const INF = 1e9;
