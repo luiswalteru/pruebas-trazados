@@ -6,7 +6,7 @@ import {
   generateOutlineSvgFromStrokes,
 } from '../utils/svgGenerator'
 import { generateDataJson, getFolderName, SPANISH_LETTERS, SPECIAL_COMBOS, computeLetterParams } from '../utils/dataGenerator'
-import { downloadSingleTrazado, exportAllTrazados } from '../utils/exportUtils'
+import { downloadSingleTrazado, exportAllTrazados, writeTrazadoToReader } from '../utils/exportUtils'
 import ManualPathDrawer from '../components/ManualPathDrawer'
 
 const ALL_LETTERS = [...SPANISH_LETTERS, ...SPECIAL_COMBOS]
@@ -200,6 +200,29 @@ export default function GeneratorPage() {
     window.__trazadoPreview = previewData
     navigate('/preview')
   }, [generatedTrazados, navigate])
+
+  // "Preview en reader": write the 5 files into public/reader/libro/assets/
+  // trazados/{type}/{folderName}/ via the dev-server middleware, then open
+  // the reader URL in a new tab. Only works under `npm run dev` — the
+  // middleware isn't available in a production build.
+  const [readerBusy, setReaderBusy] = useState(null) // letter being written, or null
+  const handlePreviewInReader = useCallback(async (letter) => {
+    const trazado = generatedTrazados[letter]
+    if (!trazado || trazado.error) return
+    setReaderBusy(letter)
+    try {
+      await writeTrazadoToReader(trazado, type)
+      const url =
+        `/reader/index.html?package=libro&manifest=imsmanifest.xml&core_exercise=edelvives_primaria` +
+        `#/trazados/${type}/${trazado.folderName}`
+      window.open(url, '_blank', 'noopener,noreferrer')
+    } catch (err) {
+      alert(`No se pudo copiar al reader: ${err.message}\n\n` +
+            `Verifica que la app corre en "npm run dev" (el middleware no existe en build de producción).`)
+    } finally {
+      setReaderBusy(null)
+    }
+  }, [generatedTrazados, type])
 
   const canAdvanceFromStep1 = !!activeLetter && !!activeImage
   const canGenerate = !generating
@@ -449,6 +472,14 @@ export default function GeneratorPage() {
                   ) : (
                     <div className="generated-actions">
                       <button className="btn btn-sm" onClick={() => handlePreview(letter)}>Preview</button>
+                      <button
+                        className="btn btn-sm"
+                        onClick={() => handlePreviewInReader(letter)}
+                        disabled={readerBusy === letter}
+                        title="Copia los archivos al reader local y abre la url en una nueva pestaña"
+                      >
+                        {readerBusy === letter ? 'Copiando...' : 'Preview en reader'}
+                      </button>
                       <button className="btn btn-sm" onClick={() => handleExportSingle(letter)}>Exportar</button>
                     </div>
                   )}
