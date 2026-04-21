@@ -12,30 +12,62 @@ import ManualPathDrawer from '../components/ManualPathDrawer'
 const ALL_LETTERS = [...SPANISH_LETTERS, ...SPECIAL_COMBOS]
 
 /**
- * Decode an SVG that was stored as a FileReader data URL back into its
- * original text. Returns null when the source isn't an SVG (e.g. PNG/JPG
- * upload) or when decoding fails. Used so the uploaded SVG can be emitted
- * verbatim as letter-outline.svg.
+ * Align the skeleton segments (auto-extracted from the PNG) to the user's
+ * stroke drawing order. The downstream `letter-dotted.svg` uses selectors
+ * `#path1`, `#path2`, ... and the data.json `letterAnimationPath` entries
+ * reference those same selectors by index, so both must stay in sync.
+ *
+ * Strategy:
+ *   • For each user stroke, find the best-matching unused skeleton segment
+ *     by end-to-end distance (trying both orientations, keeping the minimum).
+ *   • If the user drew more strokes than the skeleton has segments, the
+ *     unmatched ones fall back to the user's own drawn path — avoids leaving
+ *     a stroke without any dotted guide in the export.
+ *   • Any leftover skeleton segments are appended at the end (unlikely to be
+ *     referenced by animations but still emitted so the guide is visually
+ *     complete if the player falls back to the raw dotted SVG).
  */
-function decodeSvgDataUrl(dataUrl) {
-  if (typeof dataUrl !== 'string') return null
-  if (!dataUrl.startsWith('data:image/svg+xml')) return null
-  const comma = dataUrl.indexOf(',')
-  if (comma < 0) return null
-  const header = dataUrl.slice(0, comma)
-  const payload = dataUrl.slice(comma + 1)
-  try {
-    if (header.includes(';base64')) {
-      const bin = atob(payload)
-      const bytes = new Uint8Array(bin.length)
-      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
-      return new TextDecoder('utf-8').decode(bytes)
-    }
-    return decodeURIComponent(payload)
-  } catch {
-    return null
+function alignSkeletonToStrokes(skeletonPaths, strokePaths) {
+  if (!skeletonPaths || skeletonPaths.length === 0) return strokePaths
+  if (!strokePaths || strokePaths.length === 0) {
+    return skeletonPaths.map((p, i) => ({ id: `path${i + 1}`, d: p.d }))
   }
+  const used = new Array(skeletonPaths.length).fill(false)
+  const result = []
+  for (let i = 0; i < strokePaths.length; i++) {
+    const us = strokePaths[i]
+    const usPts = us.points || []
+    const usFirst = usPts[0]
+    const usLast = usPts[usPts.length - 1]
+    let bestIdx = -1
+    let bestScore = Infinity
+    if (usFirst && usLast) {
+      for (let j = 0; j < skeletonPaths.length; j++) {
+        if (used[j]) continue
+        const sk = skeletonPaths[j]
+        const skFirst = sk.points?.[0]
+        const skLast = sk.points?.[sk.points.length - 1]
+        if (!skFirst || !skLast) continue
+        const s1 = dist(usFirst, skFirst) + dist(usLast, skLast)
+        const s2 = dist(usFirst, skLast) + dist(usLast, skFirst)
+        const s = Math.min(s1, s2)
+        if (s < bestScore) { bestScore = s; bestIdx = j }
+      }
+    }
+    if (bestIdx >= 0) {
+      used[bestIdx] = true
+      result.push({ id: `path${result.length + 1}`, d: skeletonPaths[bestIdx].d })
+    } else {
+      result.push({ id: `path${result.length + 1}`, d: us.d })
+    }
+  }
+  for (let j = 0; j < skeletonPaths.length; j++) {
+    if (!used[j]) result.push({ id: `path${result.length + 1}`, d: skeletonPaths[j].d })
+  }
+  return result
 }
+
+function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y) }
 
 // Persist generator state across navigations so returning from Preview restores it
 const _persisted = window.__generatorState || {}
@@ -135,23 +167,25 @@ export default function GeneratorPage() {
 
     const dotList = manual.dotList
     const strokePaths = manual.strokePaths || []
+    const skeletonPaths = manual.skeletonPaths || []
 
-    // letter-fill.svg: stroke-based approximation from the user's drawn strokes.
-    // letter-outline.svg: the raw reference SVG when the user uploaded one —
-    // the full illustration contains the outline already, so using it verbatim
-    // is more faithful than the stroke-based fallback. For PNG/JPG uploads we
-    // keep generating an outline from the strokes.
+    // letter-fill.svg and letter-outline.svg: both approximations rebuilt
+    // from the user's drawn strokes. The uploaded PNG is a raster reference
+    // only — it never becomes part of the exported bundle.
     const fillStrokeWidth = Math.max(20, effDotSize * 1.2)
     const fillSvg = generateFillSvgFromStrokes(strokePaths, w, h, fillStrokeWidth)
-    const rawSvg = decodeSvgDataUrl(images[letter])
-    const outlineSvg = rawSvg || generateOutlineSvgFromStrokes(strokePaths, w, h, 3)
+    const outlineSvg = generateOutlineSvgFromStrokes(strokePaths, w, h, 3)
 
-    // Letter-dotted.svg: dashed path per stroke. Uses the user-configured
-    // stroke-width and dasharray so the exported dotted line matches the
-    // style of the reference image. With stroke-linecap:round, the visible
-    // dash = dash + strokeWidth and the visible gap = gap − strokeWidth.
+    // letter-dotted.svg: dashed paths taken from the skeleton of the uploaded
+    // PNG (the centerline of the letter's thickness), reordered to line up
+    // with the user's stroke drawing sequence so #path1/#path2/... selectors
+    // match letterAnimationPath entries in data.json. Falls back to the raw
+    // user strokes if the skeleton couldn't be extracted. stroke-linecap:round
+    // turns the 7,11 dashes into 12-unit capsules with ~6-unit gaps, matching
+    // the reference letter-dotted.svg's look.
+    const dottedPaths = alignSkeletonToStrokes(skeletonPaths, strokePaths)
     const dottedSvg = generateDottedSvg(
-      strokePaths, w, h,
+      dottedPaths, w, h,
       dottedStrokeWidth,
       `${dottedDash},${dottedGap}`,
     )
@@ -182,7 +216,7 @@ export default function GeneratorPage() {
       dotList,
       strokePaths,
     }
-  }, [type, manualDrawings, canvasWidth, canvasHeight, dotSize, strokeWidth, dottedStrokeWidth, dottedDash, dottedGap, images])
+  }, [type, manualDrawings, canvasWidth, canvasHeight, dotSize, strokeWidth, dottedStrokeWidth, dottedDash, dottedGap])
 
   // Generate all selected
   const handleGenerate = useCallback(async () => {
@@ -343,15 +377,16 @@ export default function GeneratorPage() {
             {activeLetter && (
               <>
                 <p style={{ fontSize: '0.85rem', color: '#666', marginBottom: 12 }}>
-                  Carga el SVG (o PNG/JPG) con la letra y la línea punteada.
-                  Si es SVG, se extraen automáticamente los puntos guía para
-                  ajustar el trazo al centro de la línea.
+                  Carga la imagen PNG de referencia (cuerpo de la letra en
+                  blanco sobre fondo de color, con flechas y número de orden
+                  opcionales). Se detecta automáticamente el cuerpo blanco y
+                  se obtiene su esqueleto para ajustar los trazos al soltar.
                 </p>
                 <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', flexWrap: 'wrap' }}>
                   <input
                     ref={imageInputRef}
                     type="file"
-                    accept=".svg,.png,.jpg,.jpeg,image/svg+xml,image/png,image/jpeg"
+                    accept=".png,image/png"
                     onChange={handleImageUpload}
                     style={{ display: 'none' }}
                   />
@@ -459,6 +494,9 @@ export default function GeneratorPage() {
                 height={canvasHeight}
                 dotCount={dotCount}
                 dotSize={dotSize}
+                dottedStrokeWidth={dottedStrokeWidth}
+                dottedDash={dottedDash}
+                dottedGap={dottedGap}
                 onComplete={(result) => handleManualComplete(activeLetter, result)}
               />
             </div>

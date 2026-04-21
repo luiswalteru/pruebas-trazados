@@ -2,7 +2,6 @@ import { useState, useRef, useCallback, useEffect } from 'react'
 import { buildMaskFromImage, centerStrokePoints } from '../utils/letterMask'
 import {
   extractGuideMaskFromImage,
-  isSvgSource,
   projectStrokeOnGuide,
 } from '../utils/guideExtractor'
 
@@ -44,6 +43,9 @@ export default function ManualPathDrawer({
   height = 340,
   dotCount = 40,
   dotSize = 33,
+  dottedStrokeWidth = 5,
+  dottedDash = 7,
+  dottedGap = 11,
   onComplete,
   onCancel,
 }) {
@@ -55,12 +57,16 @@ export default function ManualPathDrawer({
   const [cursorPos, setCursorPos] = useState(null)
   const maskRef = useRef(null)                         // rasterized letter mask for center-snapping
   const guideRef = useRef(null)                        // { centroids, edges } for polyline snap
+  // Skeleton segments extracted from the letter body. Rendered as the
+  // always-visible dashed tracing guide, and also emitted in onComplete so
+  // the generator can use them as letter-dotted.svg paths.
+  const [skeletonSegments, setSkeletonSegments] = useState([])
   // Debug state for the SVG guide extractor — lets us see which blobs were
   // classified as guide dots so thresholds can be tuned if the segmentation
   // misses or over-picks.
   const [guideDebug, setGuideDebug] = useState(null)   // { dotCount, centroids, edges } | null
   const [showGuideDebug, setShowGuideDebug] = useState(false)
-  const [maskMode, setMaskMode] = useState('none')     // 'svg-dots' | 'fallback' | 'none'
+  const [maskMode, setMaskMode] = useState('none')     // 'skeleton' | 'fallback' | 'none'
 
   // Project a just-finished stroke onto the guide. Runs on mouse release
   // (endStroke) and when the user clicks "Centrar trazado". The raw drawing
@@ -82,32 +88,38 @@ export default function ManualPathDrawer({
 
   const displayLetter = type === 'mayusculas' ? letter.toUpperCase() : letter.toLowerCase()
 
-  // Build the mask when the reference image changes so drawn points can snap
-  // to the centerline. For SVG inputs (full-scene illustrations with a
-  // character) we extract just the dotted-guide blobs; for raster inputs or
-  // when extraction fails we fall back to the raw dark-pixel mask.
+  // Build the mask when the reference image (PNG) changes. The extractor
+  // isolates the white letter body, thins it to a one-pixel skeleton and
+  // exposes that as a polyline (centroids + edges) the drawn strokes snap
+  // to. If the extraction fails (not enough white pixels) we fall back to
+  // the legacy dark-pixel distance-field pull.
   useEffect(() => {
     let cancelled = false
     maskRef.current = null
     guideRef.current = null
     setGuideDebug(null)
     setMaskMode('none')
+    setSkeletonSegments([])
     if (!imageSrc) return
 
     const run = async () => {
-      if (isSvgSource(imageSrc)) {
-        try {
-          const guide = await extractGuideMaskFromImage(imageSrc, width, height)
-          if (cancelled) return
-          if (guide && guide.debug.dotCount >= 3 && guide.edges.length > 0) {
-            maskRef.current = guide
-            guideRef.current = { centroids: guide.centroids, edges: guide.edges }
-            setGuideDebug(guide.debug)
-            setMaskMode('svg-dots')
-            return
+      try {
+        const guide = await extractGuideMaskFromImage(imageSrc, width, height)
+        if (cancelled) return
+        if (guide && guide.edges.length > 0 && guide.centroids.length >= 3) {
+          maskRef.current = guide
+          guideRef.current = {
+            centroids: guide.centroids,
+            edges: guide.edges,
+            endpoints: guide.endpoints,
           }
-        } catch (_) { /* fall through to raster fallback */ }
-      }
+          setGuideDebug(guide.debug)
+          setMaskMode('skeleton')
+          setSkeletonSegments(guide.segments || [])
+          return
+        }
+      } catch (_) { /* fall through to raster fallback */ }
+
       try {
         const mask = await buildMaskFromImage(imageSrc, width, height)
         if (cancelled) return
@@ -304,18 +316,29 @@ export default function ManualPathDrawer({
       return { dragger, coordinates }
     })
 
-    // Also build SVG path strings for the dotted SVG
+    // Per-user-stroke SVG path strings. Points are kept so the generator can
+    // match each user stroke to the closest skeleton segment when it builds
+    // letter-dotted.svg.
     const strokePaths = allStrokes.map((pts, i) => {
       const smoothed = smooth(pts, 2)
       let d = `M${smoothed[0].x.toFixed(2)},${smoothed[0].y.toFixed(2)}`
       for (let j = 1; j < smoothed.length; j++) {
         d += `L${smoothed[j].x.toFixed(2)},${smoothed[j].y.toFixed(2)}`
       }
-      return { id: `path${i + 1}`, d }
+      return { id: `path${i + 1}`, d, points: smoothed }
     })
 
-    onComplete?.({ dotList, strokePaths })
-  }, [strokes, currentStroke, dotCount, onComplete])
+    // Skeleton segments are the same across the lifetime of this PNG — pass
+    // them along so the generator can use them as the dashed letter-dotted.svg
+    // paths.
+    const skeletonPaths = (skeletonSegments || []).map((seg, i) => ({
+      id: `path${i + 1}`,
+      d: seg.d,
+      points: seg.points,
+    }))
+
+    onComplete?.({ dotList, strokePaths, skeletonPaths })
+  }, [strokes, currentStroke, dotCount, onComplete, skeletonSegments])
 
   // ---- Rendering ------------------------------------------------------------
   const allVisibleStrokes = [...strokes]
@@ -372,14 +395,14 @@ export default function ManualPathDrawer({
         <span><kbd>Ctrl+Z</kbd> deshacer</span>
         <span><kbd>Enter</kbd> guardar</span>
         <span><kbd>Esc</kbd> limpiar</span>
-        {maskMode === 'svg-dots' && (
+        {maskMode === 'skeleton' && (
           <span style={{ color: '#2e7d32' }}>
-            Ajuste al soltar: guía SVG ({guideDebug?.dotCount} puntos)
+            Ajuste al soltar: esqueleto del cuerpo de la letra ({guideDebug?.dotCount} puntos)
           </span>
         )}
         {maskMode === 'fallback' && (
           <span style={{ color: '#e65100' }}>
-            Ajuste al soltar: centrado por imagen
+            Ajuste al soltar: centrado por imagen (cuerpo blanco no detectado)
           </span>
         )}
       </div>
@@ -439,6 +462,25 @@ export default function ManualPathDrawer({
             style={{ position: 'absolute', inset: 0, zIndex: 5, pointerEvents: 'none' }}
             viewBox={`0 0 ${width} ${height}`}
           >
+            {/* Dashed tracing guide — rendered from the skeleton segments of
+                the letter body. Same visual style that will be exported as
+                letter-dotted.svg, so "what you see here is what you get". */}
+            {skeletonSegments.length > 0 && (
+              <g opacity="0.85">
+                {skeletonSegments.map((seg, i) => (
+                  <path
+                    key={`guide-${i}`}
+                    d={seg.d}
+                    fill="none"
+                    stroke="#ccc"
+                    strokeWidth={dottedStrokeWidth}
+                    strokeDasharray={`${dottedDash},${dottedGap}`}
+                    strokeLinecap="round"
+                  />
+                ))}
+              </g>
+            )}
+
             {/* Completed strokes */}
             {strokes.map((stroke, si) => (
               <g key={si}>

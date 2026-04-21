@@ -27,16 +27,18 @@ npx vite build --outDir /tmp/trazados-dist
 
 ## Architecture
 
-### Manual drawing over an SVG reference scene
+### Manual drawing over a PNG reference scene
 
-The app is manual-only. The user uploads one reference image per letter (recommended: an `.svg` illustration that contains the letter body, the dotted tracing guide, and decorative character art — see `ejemplo/trazado-letra-a/a_correct.svg`) and hand-draws the tracing path over it. Raster images (PNG/JPG) still work as a fallback.
+The app is manual-only and accepts **only PNG** reference images. The expected shape is the one in `ejemplo/trazado-letra-a/trazado_a.png`: the letter body in near-white pixels on a coloured background, plus directional arrows, a starting number and any decorative accent dots. Those extra marks are visual hints for the user; the extractor intentionally ignores everything that isn't white.
 
-Older versions supported `font` (opentype.js skeletonization) and `svg-bundle` (upload fill/outline/dotted SVGs) modes. Both are gone — `src/utils/pathSampler.js` and most of `src/utils/fontParser.js` are dead code retained only as reference.
+Older versions accepted SVG uploads (which were emitted verbatim as `letter-outline.svg`) and raster images with dark letters on a light background. Both are gone — uploads are PNG-only and **every output SVG is rebuilt from the user's drawn strokes**.
+
+Older versions also supported `font` (opentype.js skeletonization) and `svg-bundle` (upload fill/outline/dotted SVGs) modes. Both are gone — `src/utils/pathSampler.js` and most of `src/utils/fontParser.js` are dead code retained only as reference.
 
 A loaded reference image has these effects:
 1. Rendered under the drawing canvas as a visual guide (40% opacity).
-2. If the file is SVG: passed through `guideExtractor.extractGuideMaskFromImage`, which rasterizes it at 2× canvas resolution, thresholds dark low-saturation pixels (excluding the character's vivid colors), runs 8-connectivity flood-fill to find blobs, discards the 3 largest (letter body + character silhouettes) and the excessively small ones, keeps the rest as "guide dots", and builds a polyline from their centroids (K=2 nearest neighbors with a ~2.5× median distance cap). That polyline is what drawn strokes snap to.
-3. If the file is raster (PNG/JPG) or SVG extraction fails (fewer than 3 dots detected): falls back to `buildMaskFromImage`, a plain dark-pixel mask + distance transform — same as the pre-SVG flow.
+2. Passed through `guideExtractor.extractGuideMaskFromImage`, which rasterizes it at 2× canvas resolution, thresholds near-white opaque pixels (`min(R,G,B) >= 230`), keeps only connected components at least ~5% the size of the largest white blob (so the "a" body and the accent dot over an "i" both stay, but anti-alias specks and stray whites don't), runs **Zhang-Suen thinning** to produce a one-pixel-wide skeleton, and exposes that skeleton directly as the guide polyline: each skeleton pixel is a centroid, 8-connected neighbours become edges, and degree-1 vertices are endpoints.
+3. If extraction fails (fewer than ~3 skeleton pixels, or no white body detected): falls back to `buildMaskFromImage`, a plain dark-pixel mask + distance transform — acts as a degraded centering pull.
 
 ### Route layout
 
@@ -58,7 +60,7 @@ Realtime (during drawing):
 
 On `endStroke`:
 - `adjustStrokeToGuide(points)` decides which adjuster to run based on the guide mode:
-  - **`svg-dots`** (polyline available): `projectStrokeOnGuide(points, guide)` — snaps the first point to the nearest polyline endpoint if one is within 50 px, projects every subsequent point onto the nearest polyline segment with a **direction-aware lateral bias** (see below), snaps the last point to an endpoint if close, and runs two passes of neighbour-averaging to clean up sample-to-sample segment-switch jitter.
+  - **`skeleton`** (polyline available from the white-body skeleton): `projectStrokeOnGuide(points, guide)` — snaps the first point to the nearest polyline endpoint if one is within 50 px, projects every subsequent point onto the nearest polyline segment with a **direction-aware lateral bias** (see below), snaps the last point to an endpoint if close, and runs two passes of neighbour-averaging to clean up sample-to-sample segment-switch jitter.
   - **`fallback`** (raster mask, no polyline): `centerStrokePoints(points, maskInfo)` — the legacy iterative distance-transform pull.
   - **`none`** (no guide at all): stroke stored as-is.
 
@@ -67,9 +69,15 @@ On `endStroke`:
 - Walk backwards through `rawHistory` accumulating arc length until ≥15 px; use that span's tangent.
 - Score for a candidate projection = `d²(proj, cursor) + 2.5·lateral² + 0.4·max(0,−forward)²`, where forward/lateral are decomposed relative to the tip's direction. Forward motion is free; sideways jumps across the letter's body are heavily penalised.
 
-At finalize time (`handleFinalize`): for each already-adjusted stroke, `resample` to `dotCount` equidistant points, mark corners (angle delta > π/4), `toFixed(3)` coords, `toFixed(0)` on the first point for the `dragger`. `strokePaths` are built separately with a lighter `smooth(_, 2)` for `letter-dotted.svg` and `thum.png`.
+At finalize time (`handleFinalize`): for each already-adjusted stroke, `resample` to `dotCount` equidistant points, mark corners (angle delta > π/4), `toFixed(3)` coords, `toFixed(0)` on the first point for the `dragger`. `strokePaths` are built separately with a lighter `smooth(_, 2)` for `letter-fill.svg`, `letter-outline.svg` and `thum.png`. **`skeletonPaths`** (auto-extracted from the PNG's white-body skeleton at step-2 entry) are also emitted from the drawer; these are what `letter-dotted.svg` uses.
 
-The "Ver guía" toggle in the drawer overlays the detected guide (cyan edges, dark-teal dots, orange endpoints) — useful when the segmentation misses points or includes too many; there is no fine-grained slider UI yet, so tuning means editing the defaults in `guideExtractor.js`.
+### Automatic dashed tracing guide (Step 2)
+
+When the user enters Step 2, `extractGuideMaskFromImage` also returns `segments`: the skeleton split at junctions, merged at nearly-straight crossings, spur-filtered, oriented (vertical→top-first, horizontal→left-first) and sorted top-left-first. Each segment is a quadratic-bezier-smoothed polyline (`{ points, d }`).
+
+`ManualPathDrawer` renders those segments as a dashed overlay inside the drawing canvas using the same `stroke-width` / `stroke-dasharray` / `stroke-linecap:round` style the exported file uses — "what you see here is what you get". The visual stroke width and dash/gap lengths come from the Step-2 config inputs, so the user can tune the dotted look live and the preview stays in sync with the final export.
+
+The "Ver guía" toggle in the drawer overlays the detected guide (cyan edges, dark-teal dots, orange endpoints) — useful when the skeleton has gaps or spurs. The main thresholds to tune live in `guideExtractor.js`: `minWhite` (min R,G,B for a pixel to count as letter body), `minArea` and `minComponentRatio` (to filter specks) and `renderScale` (rasterization supersampling).
 
 ### `letter-dotted.svg` contract
 
@@ -82,13 +90,15 @@ The downstream player expects **dashed paths**, one `<path id="path{i+1}">` per 
 </g></g></g>
 ```
 
-- The `d` values come from `ManualPathDrawer.handleFinalize`'s `strokePaths` output — simple `M + L` paths built from smoothed stroke points.
+- The `d` values come from `skeletonPaths` — the quadratic-bezier-smoothed skeleton segments extracted from the PNG. `GeneratorPage.alignSkeletonToStrokes` reorders them so the i-th emitted `<path>` is the skeleton segment closest (end-to-end distance, tried in both orientations) to the i-th stroke the user drew. This keeps `#pathN` selectors from `data.json.letterAnimationPath` in sync with the user's drawing sequence.
+  - If the user drew more strokes than the skeleton has segments, the extras fall back to the user's own drawn path (so no animation entry is left without a dotted target).
+  - If the skeleton couldn't be extracted, `letter-dotted.svg` falls back to the user's `strokePaths` directly — same shape as before.
 - `letterAnimationPath[i].selector` (`#path1`, `#path2`, …) targets the individual `<path>` elements inside the wrapper.
 - **The dashing must render as actual dashes, not round dots.** The reference bundle (`ejemplo/trazado-letra-a/letter-dotted.svg`) uses capsule-shaped dashes of ~12×5 px with period 18. We reproduce that with `stroke-width: 5` + `stroke-dasharray: 7,11` + `stroke-linecap: round` — the round caps extend the 7-unit dash into a visible 12-unit capsule and shrink the 11-unit gap into a 6-unit visible gap (period 18, matching the reference).
 - Do **not** set the dash length to `0.1` — that renders as round dots, which is the wrong visual. Any dash ≥ ~5 with round caps produces proper dashes.
 - `animationPathStroke` from `data.json` is **not** reused for this stroke-width. That value drives the animated trail on the consumer side; the dashed guide has its own fixed thickness.
 
-`generateDottedSvg`'s signature is `(strokePaths, width, height, strokeWidth = 5, dashArray = '7,11')`. `GeneratorPage` just passes the first three and relies on the defaults.
+`generateDottedSvg`'s signature is `(paths, width, height, strokeWidth = 5, dashArray = '7,11')`. `GeneratorPage` passes the aligned skeleton paths + the Step-2 config values.
 
 ### Export
 
@@ -139,7 +149,7 @@ In Step 2 the user can only pick **one letter at a time** (`toggleLetter` clears
 - ES modules (`"type": "module"`). JSX uses the automatic runtime via `@vitejs/plugin-react`.
 - No TypeScript; JSDoc on hot spots. Don't introduce TS without discussing.
 - `docs/` (README, DATA-FORMATS, UTILITIES, COMPONENTS, PENDING-TASKS) is the source of truth for output schemas and behavior. Update those docs when changing data shapes or the drawing pipeline.
-- `ejemplo/trazado-letra-a/` is a **historical** reference bundle showing the pre-refactor output shape (with `character.png`, `fondo.png`, audio files, dashed `letter-dotted.svg`). It does **not** match current generator output — use it only to understand what the downstream player may have expected before.
+- `ejemplo/trazado-letra-a/trazado_a.png` is the **canonical reference input**: this is the exact shape the user is expected to upload (white letter body + arrows + order number on a coloured background). The rest of that folder (`character.png`, `fondo.png`, audio files, dashed `letter-dotted.svg`) is a **historical** output bundle from an earlier generator version and does **not** match current export. Use it only to understand what the downstream player may have expected before.
 
 ## Known dead code
 
