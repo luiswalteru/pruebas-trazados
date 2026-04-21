@@ -37,7 +37,9 @@ import { computeDistanceTransform } from './letterMask'
  *                                           white specks from arrows/numbers)
  * @param {number} [opts.closePasses=1]     morphological close passes (dilate→erode) to fill
  *                                           anti-aliasing cracks and smooth the outline
- * @param {number} [opts.maxSpurLength=14]  prune skeleton spurs shorter than this (high-res px)
+ * @param {number} [opts.maxSpurLength=6]   prune skeleton spurs shorter than this (high-res px).
+ *                                           Kept small so legitimate short strokes (cursive tails,
+ *                                           crossbars, serifs) aren't mistaken for outline bumps.
  * @param {number} [opts.maxHoleFraction=0.08] fill enclosed holes whose area is below
  *                                           bodyArea × this fraction. Small enough to catch
  *                                           arrows/number/dots drawn over the letter, large
@@ -52,7 +54,7 @@ export async function extractGuideMaskFromImage(imageSrc, width, height, opts = 
   const minArea            = opts.minArea            ?? 80
   const minComponentRatio  = opts.minComponentRatio  ?? 0.25
   const closePasses        = Math.max(0, opts.closePasses ?? 1)
-  const maxSpurLength      = Math.max(0, opts.maxSpurLength ?? 14)
+  const maxSpurLength      = Math.max(0, opts.maxSpurLength ?? 6)
   const maxHoleFraction    = Math.max(0, opts.maxHoleFraction ?? 0.08)
   const renderScale        = Math.max(1, Math.floor(opts.renderScale ?? 2))
 
@@ -149,6 +151,13 @@ export async function extractGuideMaskFromImage(imageSrc, width, height, opts = 
   // off the main centerline. Prune them so the skeleton is the clean thickness
   // axis we want as the dashed guide.
   if (maxSpurLength > 0) pruneSkeletonSpurs(skelMask, rw, rh, maxSpurLength)
+
+  // Zhang-Suen shaves 1-2 pixels off every endpoint as a side effect of the
+  // thinning rules, so the skeleton never quite reaches the tips of the
+  // letter's strokes. Extrapolate each endpoint along the direction of its
+  // last few skeleton pixels until we leave the body mask — this makes the
+  // dashed guide actually reach the end of each stroke.
+  extendSkeletonEndpoints(skelMask, bodyMask, rw, rh)
 
   // Collect skeleton pixels → centroids (letter-space coords).
   const pixIndexToCentroid = new Int32Array(rw * rh)
@@ -310,13 +319,13 @@ function extractCenterlineSegments(skelMask, rw, rh, renderScale) {
   )
 
   segs = mergeCollinearSegments(segs)
-  segs = filterShortSegments(segs, 0.12)
+  segs = filterShortSegments(segs, 0.05)
   segs = orientAndOrderSegments(segs)
 
   const out = []
   for (const seg of segs) {
     if (seg.length < 3) continue
-    const smoothed = smoothPolyline(seg, 8)
+    const smoothed = smoothPolyline(seg, 5)
     const d = pointsToSvgPath(smoothed)
     out.push({ points: smoothed, d })
   }
@@ -1035,6 +1044,77 @@ function pruneSkeletonSpurs(skel, w, h, maxSpurLength) {
           changed = true
         }
       }
+    }
+  }
+}
+
+/**
+ * Extrapolate each skeleton endpoint along its local direction until it
+ * leaves the body mask. Operates in-place on `skel`.
+ *
+ * Zhang-Suen peels endpoint pixels as a side effect of its thinning rules,
+ * so the skeleton falls short of the real stroke tips. We walk the last few
+ * skeleton pixels to estimate the outgoing direction, then step along that
+ * direction one pixel at a time, painting each position onto the skeleton
+ * for as long as we stay inside `body`. The step halts on leaving the body,
+ * hitting another skeleton pixel, or running out of room.
+ */
+function extendSkeletonEndpoints(skel, body, w, h, maxExtend = 60, backSteps = 6) {
+  const endpoints = []
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      if (skel[y * w + x] !== 1) continue
+      if (skeletonNeighbourCount(skel, x, y, w, h) === 1) endpoints.push({ x, y })
+    }
+  }
+
+  for (const ep of endpoints) {
+    // Walk backwards along the skeleton to estimate the outgoing direction.
+    const back = []
+    let prevX = -1, prevY = -1
+    let cx = ep.x, cy = ep.y
+    back.push({ x: cx, y: cy })
+    for (let s = 0; s < backSteps; s++) {
+      let nx = -1, ny = -1
+      outer: for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue
+          const tx = cx + dx, ty = cy + dy
+          if (tx < 0 || tx >= w || ty < 0 || ty >= h) continue
+          if (skel[ty * w + tx] !== 1) continue
+          if (tx === prevX && ty === prevY) continue
+          nx = tx; ny = ty
+          break outer
+        }
+      }
+      if (nx < 0) break
+      back.push({ x: nx, y: ny })
+      prevX = cx; prevY = cy
+      cx = nx; cy = ny
+    }
+    if (back.length < 2) continue
+
+    const tail = back[back.length - 1]
+    const vx = ep.x - tail.x
+    const vy = ep.y - tail.y
+    const len = Math.hypot(vx, vy)
+    if (len < 0.5) continue
+    const ux = vx / len, uy = vy / len
+
+    // Step outward from the endpoint. Use fractional stepping so diagonal
+    // extensions paint contiguous pixels.
+    let lastPX = ep.x, lastPY = ep.y
+    for (let step = 1; step <= maxExtend; step++) {
+      const fx = ep.x + ux * step
+      const fy = ep.y + uy * step
+      const nx = Math.round(fx)
+      const ny = Math.round(fy)
+      if (nx < 0 || nx >= w || ny < 0 || ny >= h) break
+      if (body[ny * w + nx] !== 1) break
+      if (nx === lastPX && ny === lastPY) continue
+      if (skel[ny * w + nx] === 1) break
+      skel[ny * w + nx] = 1
+      lastPX = nx; lastPY = ny
     }
   }
 }
