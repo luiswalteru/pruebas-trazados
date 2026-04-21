@@ -45,6 +45,11 @@ import { computeDistanceTransform } from './letterMask'
  *                                           arrows/number/dots drawn over the letter, large
  *                                           enough that the bowl of an 'a'/'o'/'e' stays hollow.
  * @param {number} [opts.renderScale=2]     super-sample factor when rasterizing
+ * @param {Uint8Array} [opts.externalBodyMask] pre-computed high-res body mask (e.g. from
+ *                                           SAM 2). When present, skips the whole
+ *                                           white-threshold + component + hole-fill
+ *                                           chain and uses the provided mask directly.
+ *                                           Must be rw × rh (= width × renderScale …).
  * @returns {Promise<{mask: Uint8Array, dist: Float32Array, width:number, height:number, centroids: Array<{x:number,y:number}>, edges: Array<{a:number,b:number}>, endpoints: Array<number>, segments: Array<{points,d:string}>, debug: Object} | null>}
  */
 export async function extractGuideMaskFromImage(imageSrc, width, height, opts = {}) {
@@ -57,6 +62,7 @@ export async function extractGuideMaskFromImage(imageSrc, width, height, opts = 
   const maxSpurLength      = Math.max(0, opts.maxSpurLength ?? 6)
   const maxHoleFraction    = Math.max(0, opts.maxHoleFraction ?? 0.08)
   const renderScale        = Math.max(1, Math.floor(opts.renderScale ?? 2))
+  const externalBodyMask   = opts.externalBodyMask || null
 
   const img = await loadImage(imageSrc)
   const rw = width * renderScale
@@ -90,34 +96,40 @@ export async function extractGuideMaskFromImage(imageSrc, width, height, opts = 
   ctx.drawImage(img, dx, dy, dw, dh)
   const { data } = ctx.getImageData(0, 0, rw, rh)
 
-  // Binary "letter body" mask: near-white + opaque.
-  const bin = new Uint8Array(rw * rh)
-  for (let i = 0; i < rw * rh; i++) {
-    const r = data[i * 4]
-    const g = data[i * 4 + 1]
-    const b = data[i * 4 + 2]
-    const a = data[i * 4 + 3]
-    if (a < 128) continue
-    if (r < minWhite || g < minWhite || b < minWhite) continue
-    bin[i] = 1
-  }
+  let bodyMask
+  if (externalBodyMask && externalBodyMask.length === rw * rh) {
+    // Path A — trust a pre-computed high-res body mask (typically from
+    // SAM 2). We still run hole-fill / close / prune / extend downstream,
+    // but the fragile near-white detection and component filter are
+    // replaced by a semantic segmentation that handles anti-aliasing,
+    // coloured markers and variable backgrounds without tuning.
+    bodyMask = new Uint8Array(externalBodyMask)
+  } else {
+    // Path B — local near-white threshold + connected-components filter.
+    const bin = new Uint8Array(rw * rh)
+    for (let i = 0; i < rw * rh; i++) {
+      const r = data[i * 4]
+      const g = data[i * 4 + 1]
+      const b = data[i * 4 + 2]
+      const a = data[i * 4 + 3]
+      if (a < 128) continue
+      if (r < minWhite || g < minWhite || b < minWhite) continue
+      bin[i] = 1
+    }
 
-  // Connected components. Drop tiny specks; keep the letter body and any
-  // large accent dot (e.g. the dot over an 'i'), but reject the small white
-  // bits of arrows/numbers that occasionally cross the threshold.
-  const components = floodFillComponents(bin, rw, rh)
-  if (components.length === 0) return null
+    const components = floodFillComponents(bin, rw, rh)
+    if (components.length === 0) return null
 
-  components.sort((a, b) => b.area - a.area)
-  const largestArea = components[0].area
-  const areaCutoff = Math.max(minArea, largestArea * minComponentRatio)
-  const kept = components.filter(c => c.area >= areaCutoff)
-  if (kept.length === 0) return null
+    components.sort((a, b) => b.area - a.area)
+    const largestArea = components[0].area
+    const areaCutoff = Math.max(minArea, largestArea * minComponentRatio)
+    const kept = components.filter(c => c.area >= areaCutoff)
+    if (kept.length === 0) return null
 
-  // Rebuild mask in high-res from kept components.
-  let bodyMask = new Uint8Array(rw * rh)
-  for (const c of kept) {
-    for (let k = 0; k < c.pixels.length; k++) bodyMask[c.pixels[k]] = 1
+    bodyMask = new Uint8Array(rw * rh)
+    for (const c of kept) {
+      for (let k = 0; k < c.pixels.length; k++) bodyMask[c.pixels[k]] = 1
+    }
   }
 
   // Fill SMALL enclosed non-white regions — arrows, numbers, the red "1"

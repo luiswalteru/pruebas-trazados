@@ -17,6 +17,8 @@ npm run build     # Production build into dist/
 npm run preview   # Preview the production build
 ```
 
+Optional: copy `.env.example` → `.env.local` and set `REPLICATE_API_TOKEN` to enable SAM 2 segmentation. Without a token the app falls back to the local near-white threshold detector and still works (just less robust on messy PNGs).
+
 No test suite, linter, or typecheck is configured. "Correctness" is validated by building, running the dev server, and exercising the wizard + PreviewPage manually.
 
 If `dist/` has restrictive permissions (common on this workstation), build to a temp dir:
@@ -37,8 +39,11 @@ Older versions also supported `font` (opentype.js skeletonization) and `svg-bund
 
 A loaded reference image has these effects:
 1. Rendered under the drawing canvas as a visual guide (40% opacity).
-2. Passed through `guideExtractor.extractGuideMaskFromImage`, which rasterizes it at 2× canvas resolution, thresholds near-white opaque pixels (`min(R,G,B) >= 230`), keeps only connected components at least ~5% the size of the largest white blob (so the "a" body and the accent dot over an "i" both stay, but anti-alias specks and stray whites don't), runs **Zhang-Suen thinning** to produce a one-pixel-wide skeleton, and exposes that skeleton directly as the guide polyline: each skeleton pixel is a centroid, 8-connected neighbours become edges, and degree-1 vertices are endpoints.
-3. If extraction fails (fewer than ~3 skeleton pixels, or no white body detected): falls back to `buildMaskFromImage`, a plain dark-pixel mask + distance transform — acts as a degraded centering pull.
+2. Segmented into a letter-body mask. Three paths, tried in order:
+   - **SAM 2 via Replicate** (preferred, when `REPLICATE_API_TOKEN` is set). `samSegmenter.getLetterBodyMask` POSTs the PNG to `/__sam-segment` (a dev-server proxy plugin in `vite.config.js`), the plugin forwards it to `POST https://api.replicate.com/v1/models/meta/sam-2/predictions` and polls until the prediction completes. The client receives the list of mask URLs, rasterises each, and scores them by how much of their area covers near-white pixels in the source (the letter body lights up far brighter than any marker). The best-scoring mask is passed to `extractGuideMaskFromImage` as `externalBodyMask` — bypassing the threshold + component-filter chain entirely and producing a clean body mask that doesn't care about anti-aliasing, marker colours or background tone.
+   - **Local threshold** (fallback when SAM fails or is disabled). `extractGuideMaskFromImage` rasterizes the PNG at 2× resolution, thresholds near-white opaque pixels (`min(R,G,B) >= 235`), keeps connected components that are at least ~25% the size of the largest white blob (so 'i'/'j' dots survive but small white specks from arrows/numbers don't), fills enclosed holes smaller than ~8% of the body area (arrows, numbers, starter dots drawn on top of the stroke), and smooths the boundary with one morphological close pass.
+3. Regardless of which path built the body mask, the rest of the pipeline is the same: **Zhang-Suen thinning** produces a one-pixel-wide skeleton, `pruneSkeletonSpurs` strips short branches (<= 6 high-res px) off the main centreline, `extendSkeletonEndpoints` extrapolates each endpoint along its local tangent until it leaves the body (compensating for the endpoint shave inherent to Zhang-Suen), and the skeleton is finally exposed as both a polyline graph (centroids + 8-conn edges, used for the snap) and a set of natural-order segments (used for the dashed guide and `letter-dotted.svg`).
+4. If nothing produces a valid skeleton: falls back to `buildMaskFromImage`, a plain dark-pixel mask + distance transform — acts as a degraded centring pull during `adjustStrokeToGuide`.
 
 ### Route layout
 

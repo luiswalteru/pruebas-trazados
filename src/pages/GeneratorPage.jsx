@@ -8,6 +8,9 @@ import {
 import { generateDataJson, getFolderName, SPANISH_LETTERS, SPECIAL_COMBOS, computeLetterParams } from '../utils/dataGenerator'
 import { downloadSingleTrazado, exportAllTrazados, writeTrazadoToReader } from '../utils/exportUtils'
 import ManualPathDrawer from '../components/ManualPathDrawer'
+import { SAM_MODEL_PRESETS, SAM_AVAILABLE } from '../utils/samSegmenter'
+import { CLAUDE_AVAILABLE } from '../utils/claudeSegmenter'
+import { GEMINI_AVAILABLE } from '../utils/geminiSegmenter'
 
 const ALL_LETTERS = [...SPANISH_LETTERS, ...SPECIAL_COMBOS]
 
@@ -95,6 +98,23 @@ export default function GeneratorPage() {
   const [dottedDash, setDottedDash] = useState(_persisted.dottedDash ?? 7)
   const [dottedGap, setDottedGap] = useState(_persisted.dottedGap ?? 11)
 
+  // Priority-ordered list of Replicate model slugs the drawer tries for
+  // SAM segmentation (first success wins). Persisted across navigations.
+  const [samModels, setSamModels] = useState(
+    _persisted.samModels || SAM_MODEL_PRESETS.map(p => p.id),
+  )
+  const [samCustomSlug, setSamCustomSlug] = useState(_persisted.samCustomSlug || '')
+  // AI provider: 'sam' (Replicate SAM), 'claude' (Anthropic vision), 'none'.
+  // Defaults to the first available provider, or 'none' if nothing configured.
+  const [aiProvider, setAiProvider] = useState(
+    _persisted.aiProvider || (
+      GEMINI_AVAILABLE ? 'gemini' :   // free tier — safest default
+      SAM_AVAILABLE ? 'sam' :
+      CLAUDE_AVAILABLE ? 'claude' :
+      'none'
+    ),
+  )
+
   // Manual drawing state
   const [manualDrawings, setManualDrawings] = useState(_persisted.manualDrawings || {})  // { letter: { dotList, strokePaths } }
   // The active letter in the drawer is always the single selected letter (only
@@ -113,6 +133,7 @@ export default function GeneratorPage() {
       currentStep, dotCount, dotSize, canvasWidth, canvasHeight, strokeWidth,
       manualDrawings, images,
       dottedStrokeWidth, dottedDash, dottedGap,
+      samModels, samCustomSlug, aiProvider,
     }
   })
 
@@ -469,6 +490,20 @@ export default function GeneratorPage() {
             </div>
           </div>
 
+          <AiProviderSelector
+            aiProvider={aiProvider}
+            setAiProvider={setAiProvider}
+          />
+
+          {aiProvider === 'sam' && SAM_AVAILABLE && (
+            <SamModelSelector
+              samModels={samModels}
+              setSamModels={setSamModels}
+              samCustomSlug={samCustomSlug}
+              setSamCustomSlug={setSamCustomSlug}
+            />
+          )}
+
           {activeLetter && (
             <div style={{ marginBottom: 24 }}>
               <h3>
@@ -497,6 +532,8 @@ export default function GeneratorPage() {
                 dottedStrokeWidth={dottedStrokeWidth}
                 dottedDash={dottedDash}
                 dottedGap={dottedGap}
+                samModels={samModels}
+                aiProvider={aiProvider}
                 onComplete={(result) => handleManualComplete(activeLetter, result)}
               />
             </div>
@@ -574,6 +611,191 @@ export default function GeneratorPage() {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+/**
+ * Picker for the SAM model(s) the drawer uses. Order = priority: the drawer
+ * tries slugs top-down and stops at the first success. Users can:
+ *   • Toggle presets on/off.
+ *   • Reorder with the ↑ / ↓ buttons.
+ *   • Add a custom Replicate slug (e.g. "owner/name") that's appended to
+ *     the list — useful when a new community SAM wrapper appears.
+ */
+function SamModelSelector({ samModels, setSamModels, samCustomSlug, setSamCustomSlug }) {
+  const presetMap = new Map(SAM_MODEL_PRESETS.map(p => [p.id, p]))
+  const customIds = samModels.filter(id => !presetMap.has(id))
+
+  const toggle = (id) => {
+    setSamModels(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
+  }
+  const move = (id, delta) => {
+    setSamModels(prev => {
+      const i = prev.indexOf(id)
+      if (i < 0) return prev
+      const j = i + delta
+      if (j < 0 || j >= prev.length) return prev
+      const next = [...prev]
+      ;[next[i], next[j]] = [next[j], next[i]]
+      return next
+    })
+  }
+  const removeCustom = (id) => setSamModels(prev => prev.filter(x => x !== id))
+  const addCustom = () => {
+    const slug = samCustomSlug.trim()
+    if (!slug || !/^[\w.-]+\/[\w.-]+$/.test(slug)) return
+    if (samModels.includes(slug)) return
+    setSamModels(prev => [...prev, slug])
+    setSamCustomSlug('')
+  }
+
+  const orderedIds = samModels
+  const disabledPresetIds = SAM_MODEL_PRESETS
+    .map(p => p.id)
+    .filter(id => !samModels.includes(id))
+
+  return (
+    <div style={{
+      marginBottom: 24, padding: 16,
+      background: '#f5f8fc', border: '1px solid #d5e3f2', borderRadius: 8,
+    }}>
+      <h4 style={{ margin: '0 0 8px 0', fontSize: '0.95rem' }}>
+        Modelos SAM (prioridad de arriba a abajo)
+      </h4>
+      <p style={{ fontSize: '0.8rem', color: '#555', margin: '0 0 12px 0' }}>
+        Al segmentar se prueba cada modelo en orden; si uno devuelve 402 /
+        429 / error, pasa automáticamente al siguiente.
+      </p>
+
+      {orderedIds.length === 0 && (
+        <p style={{ color: '#b26a00', fontSize: '0.85rem' }}>
+          Lista vacía — SAM está deshabilitado; se usará el extractor local.
+        </p>
+      )}
+
+      {orderedIds.map((id, idx) => {
+        const preset = presetMap.get(id)
+        return (
+          <div key={id} style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: '6px 8px', marginBottom: 4,
+            background: '#fff', border: '1px solid #e0e6ed', borderRadius: 4,
+            fontSize: '0.85rem',
+          }}>
+            <span style={{
+              minWidth: 20, color: '#888', fontFamily: 'monospace',
+            }}>{idx + 1}.</span>
+            <code style={{ flex: 1, fontSize: '0.8rem' }}>{id}</code>
+            {preset && (
+              <span style={{ fontSize: '0.75rem', color: preset.paid ? '#b26a00' : '#2e7d32' }}>
+                {preset.cost}
+              </span>
+            )}
+            <button
+              type="button" className="btn btn-sm"
+              disabled={idx === 0}
+              onClick={() => move(id, -1)}
+              title="Subir prioridad"
+            >↑</button>
+            <button
+              type="button" className="btn btn-sm"
+              disabled={idx === orderedIds.length - 1}
+              onClick={() => move(id, +1)}
+              title="Bajar prioridad"
+            >↓</button>
+            <button
+              type="button" className="btn btn-sm"
+              onClick={() => preset ? toggle(id) : removeCustom(id)}
+              title={preset ? 'Quitar de la lista' : 'Eliminar custom'}
+            >✕</button>
+          </div>
+        )
+      })}
+
+      {disabledPresetIds.length > 0 && (
+        <div style={{ marginTop: 8 }}>
+          <span style={{ fontSize: '0.8rem', color: '#666', marginRight: 8 }}>Añadir preset:</span>
+          {disabledPresetIds.map(id => (
+            <button
+              key={id}
+              type="button" className="btn btn-sm"
+              onClick={() => toggle(id)}
+              style={{ marginRight: 6 }}
+            >+ {id}</button>
+          ))}
+        </div>
+      )}
+
+      <div style={{ marginTop: 12, display: 'flex', gap: 6, alignItems: 'center' }}>
+        <span style={{ fontSize: '0.8rem', color: '#666' }}>Slug custom:</span>
+        <input
+          type="text"
+          placeholder="owner/name"
+          value={samCustomSlug}
+          onChange={e => setSamCustomSlug(e.target.value)}
+          style={{
+            flex: 1, padding: '4px 8px',
+            border: '1px solid #ccc', borderRadius: 4,
+            fontFamily: 'monospace', fontSize: '0.85rem',
+          }}
+        />
+        <button
+          type="button" className="btn btn-sm btn-primary"
+          onClick={addCustom}
+          disabled={!/^[\w.-]+\/[\w.-]+$/.test(samCustomSlug.trim())}
+        >Añadir</button>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Provider dropdown for the segmentation backend. Each option is only
+ * selectable when its env-var-driven availability flag is true — otherwise
+ * it's disabled and annotated with a hint so the user knows what to add
+ * to `.env.local`.
+ */
+function AiProviderSelector({ aiProvider, setAiProvider }) {
+  const options = [
+    { id: 'gemini', label: 'Gemini (Google vision) — free tier', available: GEMINI_AVAILABLE, hint: 'Requiere GEMINI_API_KEY (gratis en aistudio.google.com/apikey)' },
+    { id: 'sam', label: 'SAM (Replicate) — paga', available: SAM_AVAILABLE, hint: 'Requiere REPLICATE_API_TOKEN + crédito en replicate.com' },
+    { id: 'claude', label: 'Claude (Anthropic vision) — paga', available: CLAUDE_AVAILABLE, hint: 'Requiere ANTHROPIC_API_KEY + crédito en console.anthropic.com' },
+    { id: 'none', label: 'Solo extractor local (sin IA)', available: true },
+  ]
+
+  return (
+    <div style={{
+      marginBottom: 16, padding: 12,
+      background: '#f0f4f9', border: '1px solid #cfd8e3', borderRadius: 8,
+      display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+    }}>
+      <label style={{ fontWeight: 600, fontSize: '0.9rem' }}>
+        Proveedor IA:
+      </label>
+      <select
+        value={aiProvider}
+        onChange={e => setAiProvider(e.target.value)}
+        style={{
+          padding: '6px 10px', borderRadius: 4,
+          border: '1px solid #ccc', fontSize: '0.9rem',
+        }}
+      >
+        {options.map(o => (
+          <option key={o.id} value={o.id} disabled={!o.available}>
+            {o.label}{!o.available ? ` — no configurado` : ''}
+          </option>
+        ))}
+      </select>
+      {(() => {
+        const picked = options.find(o => o.id === aiProvider)
+        if (!picked || picked.available) return null
+        return (
+          <span style={{ color: '#b26a00', fontSize: '0.8rem' }}>
+            {picked.hint} en .env.local
+          </span>
+        )
+      })()}
     </div>
   )
 }

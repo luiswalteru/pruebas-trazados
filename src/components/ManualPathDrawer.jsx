@@ -4,6 +4,9 @@ import {
   extractGuideMaskFromImage,
   projectStrokeOnGuide,
 } from '../utils/guideExtractor'
+import { getLetterBodyMask, SAM_AVAILABLE, SAM_MODEL_PRESETS } from '../utils/samSegmenter'
+import { getSegmentsViaClaude, CLAUDE_AVAILABLE } from '../utils/claudeSegmenter'
+import { getSegmentsViaGemini, GEMINI_AVAILABLE } from '../utils/geminiSegmenter'
 
 /**
  * ManualPathDrawer
@@ -46,10 +49,13 @@ export default function ManualPathDrawer({
   dottedStrokeWidth = 5,
   dottedDash = 7,
   dottedGap = 11,
+  samModels = null,
+  aiProvider = 'sam',
   onComplete,
   onCancel,
 }) {
   const SCALE = 1.4
+  console.log('[drawer] render', { letter, imageLen: imageSrc?.length, width, height, SAM_AVAILABLE })
   const containerRef = useRef(null)
   const [isDrawing, setIsDrawing] = useState(false)
   const [strokes, setStrokes] = useState([])           // finished strokes: Array<Array<{x,y}>>
@@ -88,37 +94,192 @@ export default function ManualPathDrawer({
 
   const displayLetter = type === 'mayusculas' ? letter.toUpperCase() : letter.toLowerCase()
 
-  // Build the mask when the reference image (PNG) changes. The extractor
-  // isolates the white letter body, thins it to a one-pixel skeleton and
-  // exposes that as a polyline (centroids + edges) the drawn strokes snap
-  // to. If the extraction fails (not enough white pixels) we fall back to
-  // the legacy dark-pixel distance-field pull.
+  // Build the mask when the reference image (PNG) changes. Preferred path is
+  // SAM 2 via the dev-server proxy (/__sam-segment): we ask Replicate for a
+  // letter-body segmentation, feed that into the local extractor as its
+  // externalBodyMask, and skip the fragile near-white threshold entirely.
+  // If SAM is disabled (no REPLICATE_API_TOKEN) or fails (network / 502 /
+  // bad mask) we drop to the local threshold pipeline, and finally to the
+  // raster distance-field pull if even that yields no polyline.
+  const [samLoading, setSamLoading] = useState(false)
+  const [samCurrentModel, setSamCurrentModel] = useState(null)   // model being tried right now
+  const [samProgress, setSamProgress] = useState({ idx: 0, total: 0 }) // "2 of 3"
+  const [samRateLimited, setSamRateLimited] = useState(false)
+  const [samInsufficientCredit, setSamInsufficientCredit] = useState(false)
+  const [samOverloaded, setSamOverloaded] = useState(false)
+  const [samError, setSamError] = useState(null)
   useEffect(() => {
     let cancelled = false
+    // AbortController cancels the in-flight SAM fetch on cleanup. This
+    // matters in React StrictMode (dev): the effect runs → cleanup →
+    // runs again, and without abort() both passes would hit Replicate.
+    const samController = new AbortController()
     maskRef.current = null
     guideRef.current = null
     setGuideDebug(null)
     setMaskMode('none')
     setSkeletonSegments([])
+    setSamLoading(false)
+    setSamCurrentModel(null)
+    setSamProgress({ idx: 0, total: 0 })
+    setSamRateLimited(false)
+    setSamInsufficientCredit(false)
+    setSamOverloaded(false)
+    setSamError(null)
     if (!imageSrc) return
 
-    const run = async () => {
-      try {
-        const guide = await extractGuideMaskFromImage(imageSrc, width, height)
-        if (cancelled) return
-        if (guide && guide.edges.length > 0 && guide.centroids.length >= 3) {
-          maskRef.current = guide
-          guideRef.current = {
-            centroids: guide.centroids,
-            edges: guide.edges,
-            endpoints: guide.endpoints,
-          }
-          setGuideDebug(guide.debug)
-          setMaskMode('skeleton')
-          setSkeletonSegments(guide.segments || [])
-          return
+    const effectId = Math.random().toString(36).slice(2, 7)
+    console.log(`[drawer ${effectId}] effect setup`, {
+      imageLen: imageSrc?.length, width, height,
+    })
+    samController.signal.addEventListener('abort', () => {
+      console.log(`[drawer ${effectId}] abort signal fired`)
+    })
+
+    const tryLocalExtractor = async (externalBodyMask) => {
+      const guide = await extractGuideMaskFromImage(
+        imageSrc, width, height,
+        externalBodyMask ? { externalBodyMask } : {},
+      )
+      if (cancelled) return false
+      if (guide && guide.edges.length > 0 && guide.centroids.length >= 3) {
+        maskRef.current = guide
+        guideRef.current = {
+          centroids: guide.centroids,
+          edges: guide.edges,
+          endpoints: guide.endpoints,
         }
-      } catch (_) { /* fall through to raster fallback */ }
+        setGuideDebug(guide.debug)
+        setMaskMode(externalBodyMask ? 'sam' : 'skeleton')
+        setSkeletonSegments(guide.segments || [])
+        return true
+      }
+      return false
+    }
+
+    // Vision-LLM path: the model returns centerline segments directly
+    // (no mask-to-skeleton round-trip). Used by Claude and Gemini.
+    // Feeds the drawer's skeletonSegments state and marks the guide mode
+    // with the provider id so the status line reflects which one ran.
+    const tryVisionLLM = async (providerId, fn, labelForStatus) => {
+      setSamLoading(true)
+      setSamCurrentModel(labelForStatus)
+      setSamProgress({ idx: 1, total: 1 })
+      try {
+        const out = await fn(imageSrc, width, height, { signal: samController.signal })
+        if (cancelled) return false
+        if (out && out.segments && out.segments.length > 0) {
+          // The provider gave us segments directly; we don't have a
+          // centroids/edges graph to snap strokes against, so guideRef
+          // stays null (no snap-on-release), but the dashed guide +
+          // letter-dotted.svg come from these.
+          maskRef.current = null
+          guideRef.current = null
+          setGuideDebug({
+            dotCount: out.segments.reduce((a, s) => a + (s.points?.length || 0), 0),
+            centroids: [], edges: [],
+          })
+          setMaskMode(providerId)
+          setSkeletonSegments(out.segments)
+          return true
+        }
+        return false
+      } catch (err) {
+        if (err?.name === 'AbortError') return 'aborted'
+        if (err?.rateLimited) setSamRateLimited(true)
+        else if (err?.insufficientCredit) setSamInsufficientCredit(true)
+        else if (err?.overloaded) setSamOverloaded(true)
+        else setSamError(err?.message || String(err))
+        console.warn(`[drawer] ${providerId} segmenter failed:`, err)
+        return false
+      } finally {
+        if (!cancelled) setSamLoading(false)
+      }
+    }
+
+    const run = async () => {
+      console.log(`[drawer ${effectId}] run starts`, {
+        aiProvider, SAM_AVAILABLE, CLAUDE_AVAILABLE, GEMINI_AVAILABLE,
+      })
+
+      // Vision-LLM providers — centerline coords direct from the model.
+      if (aiProvider === 'claude' && CLAUDE_AVAILABLE) {
+        const r = await tryVisionLLM('claude', getSegmentsViaClaude, 'claude (vision)')
+        if (r === 'aborted') return
+        if (r === true) return
+      }
+      if (aiProvider === 'gemini' && GEMINI_AVAILABLE) {
+        const r = await tryVisionLLM('gemini', getSegmentsViaGemini, 'gemini (vision)')
+        if (r === 'aborted') return
+        if (r === true) return
+      }
+
+      if (aiProvider === 'sam' && SAM_AVAILABLE) {
+        // List of Replicate slugs to try in order. First hit wins; any
+        // failure (402, 429, 404, 5xx, invalid mask) skips to the next
+        // until the list is exhausted. This lets the user pre-fill a
+        // priority list (paid → community → another community) so any
+        // single model being down doesn't kill the flow.
+        const modelsToTry = (Array.isArray(samModels) && samModels.length > 0)
+          ? samModels
+          : [SAM_MODEL_PRESETS[0].id]
+
+        console.log(`[drawer] trying ${modelsToTry.length} SAM model(s) in order:`, modelsToTry)
+        setSamLoading(true)
+        let lastErr = null
+        for (let i = 0; i < modelsToTry.length; i++) {
+          const model = modelsToTry[i]
+          setSamCurrentModel(model)
+          setSamProgress({ idx: i + 1, total: modelsToTry.length })
+          console.log(`[drawer] SAM attempt ${i + 1}/${modelsToTry.length}: ${model}`)
+
+          try {
+            const sam = await getLetterBodyMask(imageSrc, width, height, {
+              signal: samController.signal,
+              model,
+            })
+            if (cancelled) return
+            if (sam && sam.mask) {
+              if (await tryLocalExtractor(sam.mask)) {
+                console.log(`[drawer] SAM succeeded with ${model}`)
+                setSamLoading(false)
+                return
+              }
+              console.info(`[drawer] ${model} returned mask but extractor produced no polyline`)
+            } else {
+              console.info(`[drawer] ${model} returned no mask`)
+            }
+            lastErr = new Error(`${model}: no usable mask`)
+          } catch (err) {
+            if (err?.name === 'AbortError') {
+              console.log('[drawer] SAM fetch aborted')
+              return
+            }
+            lastErr = err
+            const reason = err?.insufficientCredit ? '402 insufficient credit'
+              : err?.rateLimited ? '429 rate limited'
+              : (err?.message || String(err))
+            console.info(`[drawer] ${model} failed → ${reason}`)
+          }
+
+          if (i < modelsToTry.length - 1) {
+            console.info(`[drawer] trying next model: ${modelsToTry[i + 1]}`)
+          }
+        }
+
+        // Exhausted all models — surface whichever error was last.
+        console.warn(`[drawer] all ${modelsToTry.length} SAM model(s) exhausted; using local extractor`)
+        if (!cancelled && lastErr) {
+          if (lastErr.rateLimited) setSamRateLimited(true)
+          else if (lastErr.insufficientCredit) setSamInsufficientCredit(true)
+          else setSamError(lastErr.message || String(lastErr))
+        }
+        if (!cancelled) setSamLoading(false)
+      }
+
+      try {
+        if (await tryLocalExtractor(null)) return
+      } catch (_) { /* fall through */ }
 
       try {
         const mask = await buildMaskFromImage(imageSrc, width, height)
@@ -129,9 +290,19 @@ export default function ManualPathDrawer({
         if (!cancelled) { maskRef.current = null; setMaskMode('none') }
       }
     }
-    run()
 
-    return () => { cancelled = true }
+    // StrictMode debounce: delay the actual work ~80ms. If React's simulated
+    // unmount fires within that window (always does, in microseconds), the
+    // timer is cancelled before doing any network I/O. The real mount fires
+    // the setTimeout cleanly after the debounce window.
+    const debounceId = setTimeout(run, 80)
+
+    return () => {
+      console.log(`[drawer ${effectId}] effect cleanup`)
+      cancelled = true
+      clearTimeout(debounceId)
+      samController.abort()
+    }
   }, [imageSrc, width, height])
 
   // ---- Coordinate conversion ------------------------------------------------
@@ -395,6 +566,58 @@ export default function ManualPathDrawer({
         <span><kbd>Ctrl+Z</kbd> deshacer</span>
         <span><kbd>Enter</kbd> guardar</span>
         <span><kbd>Esc</kbd> limpiar</span>
+        {samLoading && (
+          <span style={{ color: '#1565c0' }}>
+            Segmentando con <code style={{ fontSize: '0.85em' }}>{samCurrentModel || 'SAM'}</code>
+            {samProgress.total > 1 ? ` (${samProgress.idx}/${samProgress.total})` : ''}…
+          </span>
+        )}
+        {samRateLimited && !samLoading && (
+          <span style={{ color: '#b26a00' }} title="Replicate rate-limita el plan gratuito a ~6 req/min. Añade un método de pago o espera 10-15s entre cargas.">
+            SAM rate-limited — usando extractor local
+          </span>
+        )}
+        {samOverloaded && !samLoading && (
+          <span style={{ color: '#b26a00' }}>
+            Proveedor saturado (503) tras reintentos — intenta de nuevo en unos minutos o cambia de proveedor. Usando extractor local mientras tanto.
+          </span>
+        )}
+        {samInsufficientCredit && !samLoading && (
+          <span style={{ color: '#b26a00' }}>
+            SAM requiere crédito (meta/sam-2 no es gratis) — usando extractor local.{' '}
+            <a
+              href="https://replicate.com/account/billing"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: '#1565c0', textDecoration: 'underline' }}
+            >
+              Añadir crédito en Replicate
+            </a>
+          </span>
+        )}
+        {samError && !samLoading && (
+          <span
+            style={{ color: '#b71c1c', maxWidth: 600, wordBreak: 'break-word' }}
+            title={samError}
+          >
+            SAM error → extractor local. Detalle: {samError.length > 140 ? samError.slice(0, 140) + '…' : samError}
+          </span>
+        )}
+        {maskMode === 'sam' && (
+          <span style={{ color: '#1565c0' }}>
+            Ajuste al soltar: esqueleto SAM 2 ({guideDebug?.dotCount} puntos)
+          </span>
+        )}
+        {maskMode === 'claude' && (
+          <span style={{ color: '#7c3aed' }}>
+            Guía generada por Claude (vision) — dibuja sin snap
+          </span>
+        )}
+        {maskMode === 'gemini' && (
+          <span style={{ color: '#1a73e8' }}>
+            Guía generada por Gemini (vision) — dibuja sin snap
+          </span>
+        )}
         {maskMode === 'skeleton' && (
           <span style={{ color: '#2e7d32' }}>
             Ajuste al soltar: esqueleto del cuerpo de la letra ({guideDebug?.dotCount} puntos)
