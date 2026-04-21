@@ -11,6 +11,32 @@ import ManualPathDrawer from '../components/ManualPathDrawer'
 
 const ALL_LETTERS = [...SPANISH_LETTERS, ...SPECIAL_COMBOS]
 
+/**
+ * Decode an SVG that was stored as a FileReader data URL back into its
+ * original text. Returns null when the source isn't an SVG (e.g. PNG/JPG
+ * upload) or when decoding fails. Used so the uploaded SVG can be emitted
+ * verbatim as letter-outline.svg.
+ */
+function decodeSvgDataUrl(dataUrl) {
+  if (typeof dataUrl !== 'string') return null
+  if (!dataUrl.startsWith('data:image/svg+xml')) return null
+  const comma = dataUrl.indexOf(',')
+  if (comma < 0) return null
+  const header = dataUrl.slice(0, comma)
+  const payload = dataUrl.slice(comma + 1)
+  try {
+    if (header.includes(';base64')) {
+      const bin = atob(payload)
+      const bytes = new Uint8Array(bin.length)
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+      return new TextDecoder('utf-8').decode(bytes)
+    }
+    return decodeURIComponent(payload)
+  } catch {
+    return null
+  }
+}
+
 // Persist generator state across navigations so returning from Preview restores it
 const _persisted = window.__generatorState || {}
 
@@ -110,11 +136,15 @@ export default function GeneratorPage() {
     const dotList = manual.dotList
     const strokePaths = manual.strokePaths || []
 
-    // letter-fill.svg / letter-outline.svg: always stroke-based — the reference
-    // image is raster-only and we don't vectorize it.
+    // letter-fill.svg: stroke-based approximation from the user's drawn strokes.
+    // letter-outline.svg: the raw reference SVG when the user uploaded one —
+    // the full illustration contains the outline already, so using it verbatim
+    // is more faithful than the stroke-based fallback. For PNG/JPG uploads we
+    // keep generating an outline from the strokes.
     const fillStrokeWidth = Math.max(20, effDotSize * 1.2)
     const fillSvg = generateFillSvgFromStrokes(strokePaths, w, h, fillStrokeWidth)
-    const outlineSvg = generateOutlineSvgFromStrokes(strokePaths, w, h, 3)
+    const rawSvg = decodeSvgDataUrl(images[letter])
+    const outlineSvg = rawSvg || generateOutlineSvgFromStrokes(strokePaths, w, h, 3)
 
     // Letter-dotted.svg: dashed path per stroke. Uses the user-configured
     // stroke-width and dasharray so the exported dotted line matches the
@@ -152,7 +182,7 @@ export default function GeneratorPage() {
       dotList,
       strokePaths,
     }
-  }, [type, manualDrawings, canvasWidth, canvasHeight, dotSize, strokeWidth, dottedStrokeWidth, dottedDash, dottedGap])
+  }, [type, manualDrawings, canvasWidth, canvasHeight, dotSize, strokeWidth, dottedStrokeWidth, dottedDash, dottedGap, images])
 
   // Generate all selected
   const handleGenerate = useCallback(async () => {
