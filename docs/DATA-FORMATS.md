@@ -1,5 +1,19 @@
 # Formatos de Datos - Schemas y Estructuras
 
+## Bundle exportado por letra
+
+El generador produce exactamente dos archivos por letra:
+
+```
+trazado-letra-{nombre}/
+  data.json
+  base.svg
+```
+
+`bg.svg` y `dotted.svg` se suben en el Paso 1 y **no** se re-emiten en el ZIP — los autora el pipeline de contenido aparte. Tampoco hay `letter-fill.svg`, `letter-outline.svg`, `letter-dotted.svg`, `thum.png`, `character.png` ni audios: ninguno se genera desde este refactor.
+
+---
+
 ## data.json
 
 Archivo principal que describe el trazado de una letra. Estructura completa generada por `generateDataJson` en `src/utils/dataGenerator.js`:
@@ -21,13 +35,13 @@ Archivo principal que describe el trazado de una letra. Estructura completa gene
   "letterOutline": "letter-outline.svg",
   "letterDotted": "letter-dotted.svg",
   "letter": "a",
-  "letterSize": [380, 340],       // Lo que haya configurado el usuario en Step 3
-  "animationPathStroke": 16,      // Auto via computeLetterParams(..., canvasW) o forzado por el usuario
+  "letterSize": [380, 340],
+  "animationPathStroke": 16,
   "letterAnimationPath": [
     { "selector": "#path1", "time": 10 },
     { "selector": "#path2", "time": 8 }
   ],
-  "dotSize": 33,                  // Auto via computeLetterParams(..., canvasW) o forzado por el usuario
+  "dotSize": 33,
   "playButtonPosition": [-20, 30],
   "dotList": [
     {
@@ -42,21 +56,23 @@ Archivo principal que describe el trazado de una letra. Estructura completa gene
 }
 ```
 
-### Advertencia sobre campos huerfanos
-
-Los campos `character` y `title.audio.{es,val}` siguen emitiendose tal cual, pero **desde el refactor manual-only estos archivos ya no se incluyen en el ZIP exportado**. Solo se empaquetan `data.json`, los tres SVGs y `thum.png`. Si el componente consumidor los necesita, hay que proveerlos aparte o dejar de escribir estos campos en `generateDataJson`.
+El shape coincide con `ejemplo/trazado-letra-a/data.json`, que es la referencia canonica que lee el reader.
 
 ### Campos clave
 
 | Campo | Tipo | Descripcion |
 |-------|------|-------------|
-| `letter` | string | Identificador. Ligada: `"a"`, `"b"`, `"ch"`, `"ll"`, `"ñ"`. Mayusculas: `"UpperA"`, `"UpperCh"`, `"UpperLl"`, `"UpperÑ"` (see nota abajo) |
-| `letterSize` | `[width, height]` | Dimensiones del canvas. Siempre el valor configurado por el usuario en Step 3 (default 380×340) — ya no hay auto-compute por letra |
+| `letter` | string | Identificador. Ligada: `"a"`, `"b"`, `"ch"`, `"ll"`, `"ñ"`. Mayusculas: `"UpperA"`, `"UpperCh"`, `"UpperLl"`, `"UpperÑ"` (ver nota abajo) |
+| `letterSize` | `[width, height]` | Dimensiones del canvas. Siempre el valor configurado por el usuario en el Paso 2 (default 380×340) |
 | `animationPathStroke` | number | Grosor del trazo de animacion. Auto: ligada 10–18, mayusculas 10–12 via `computeLetterParams`. O forzado por el usuario |
-| `letterAnimationPath` | array | Selectores CSS para paths del SVG dotted y tiempo de animacion |
+| `letterAnimationPath` | array | Selectores CSS (`#path1`, `#path2`, ...) que apuntan a los `<path>` dentro de `base.svg`, con su tiempo de animacion |
 | `dotSize` | number | Tamano visual de cada punto. Auto: ligada 26–40, mayusculas 34–40 via `computeLetterParams`. O forzado por el usuario |
 | `playButtonPosition` | `[x, y]` | Posicion relativa del boton play — constante `[-20, 30]` |
 | `dotList` | array | Array de trazos. Cada trazo tiene `dragger` y `coordinates` |
+
+### Nota sobre los pointers a assets externos
+
+Los campos `character`, `letterFill`, `letterOutline`, `letterDotted`, y `title.audio.{es,val}` apuntan a archivos que **esta herramienta no produce** — los aporta el pipeline de contenido aparte (audios, ilustraciones, SVG de fill/outline/dotted pre-generados). Los pointers se mantienen en `data.json` porque el reader los lee: el shape del JSON tiene que coincidir con `ejemplo/trazado-letra-a/data.json` para que el reader renderice correctamente el trazado.
 
 ### Nota sobre el campo `letter` (ñ)
 
@@ -82,15 +98,15 @@ Cada elemento del array `dotList` representa un trazo (stroke) del trazado:
   - `coords`: Array `[x, y]` con 3 decimales, en espacio de letra (px del canvas)
   - `corner` (opcional): `true` si el punto es una esquina/cambio de direccion (angulo > 45°)
 
-### Generacion del dotList (modo manual)
+### Generacion del dotList
 
 `ManualPathDrawer.handleFinalize` construye el dotList asi:
 
-1. Toma los trazos dibujados (arrays crudos de `{x, y}` ya filtrados por distancia minima y suavizados por EMA + `snapToCenterline`)
-2. Por cada trazo: `resample` a `dotCount` puntos equidistantes
-3. Aplica `toFixed(3)` a cada `coords`
-4. Marca esquinas con `corner: true` (diferencia de angulo entrada/salida > π/4)
-5. Extrae `dragger` del primer punto resampleado via `toFixed(0)`
+1. Toma los trazos dibujados (arrays crudos de `{x, y}` ya filtrados por distancia minima y suavizados por EMA, y proyectados al soltar sobre el esqueleto de `dotted.svg` via `projectStrokeOnGuide`).
+2. Por cada trazo: `resample` a `dotCount` puntos equidistantes.
+3. Aplica `toFixed(3)` a cada `coords`.
+4. Marca esquinas con `corner: true` (diferencia de angulo entrada/salida > π/4).
+5. Extrae `dragger` del primer punto resampleado via `toFixed(0)`.
 
 ### Multi-stroke (letras con varios trazos)
 
@@ -109,113 +125,54 @@ Letras como "A" mayuscula tienen multiples trazos. El usuario dibuja cada uno po
 }
 ```
 
-El indice de cada `dotList[i]` corresponde al selector `#path{i+1}` en `letterAnimationPath`.
+El indice de cada `dotList[i]` corresponde al selector `#path{i+1}` en `letterAnimationPath`, que a su vez apunta al `<path id="path{i+1}">` dentro de `base.svg`.
 
 El campo `time` lo calcula `GeneratorPage.generateForLetter` como `Math.max(2, Math.round(coordinates.length / 4))` y lo pasa a `generateDataJson`, que prioriza `p.time` si viene (caida a `Math.max(2, round(length / 50))` si no).
 
 ---
 
-## SVG Files
-
-### letter-fill.svg
-
-SVG con la letra completamente rellena. Se usa como feedback visual cuando el usuario completa el trazado.
-
-- Si hay fuente de referencia: generado con `generateFillSvg(pathD, w, h)` — un unico `<path id="fill">` con el glifo.
-- Si **no** hay fuente: generado con `generateFillSvgFromStrokes(strokePaths, w, h, strokeWidth)` — un `<path id="fillN">` por trazo del usuario, dibujado como linea engrosada (fallback — silueta aproximada).
-
-```xml
-<?xml version="1.0" encoding="UTF-8" standalone="no"?>
-<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "...">
-<svg width="100%" height="100%" viewBox="0 0 380 340" ...>
-  <g><g><path id="fill" d="M..." style="fill-rule:nonzero;"/></g></g>
-</svg>
-```
-
-**Importante**: Cuando hay fuente, el path tiene `id="fill"`. En el fallback los ids son `fill1`, `fill2`, ...
-
-### letter-outline.svg
-
-SVG con el contorno de la letra, **interior blanco**. Misma silueta que `letter-fill.svg` pero hueca: se ve un borde negro alrededor del cuerpo y el interior es blanco, para que no tape la guia punteada ni la animacion de trazado.
-
-- Con fuente: `generateOutlineSvg` — un unico `<path id="contorno">`.
-- Sin fuente: `generateOutlineSvgFromStrokes` — para cada trazo, dos paths stacked sobre el mismo `d`: uno negro con `stroke-width = fillStrokeWidth` (`id="contornoN"`) y otro blanco con `stroke-width = fillStrokeWidth − 2·borderWidth` (sin id). Primero todos los negros, luego todos los blancos, para que el solape entre trazos (p.ej. bucle + cola de una "a") no deje costura interna.
-
-```xml
-<svg width="100%" height="100%" viewBox="0 0 380 340" ...>
-  <g><g>
-    <path id="contorno1" d="M..." style="fill:none;stroke:#000;stroke-width:40px;stroke-linecap:round;stroke-linejoin:round;"/>
-    <path id="contorno2" d="M..." style="fill:none;stroke:#000;stroke-width:40px;stroke-linecap:round;stroke-linejoin:round;"/>
-    <path d="M..." style="fill:none;stroke:#fff;stroke-width:34px;stroke-linecap:round;stroke-linejoin:round;"/>
-    <path d="M..." style="fill:none;stroke:#fff;stroke-width:34px;stroke-linecap:round;stroke-linejoin:round;"/>
-  </g></g>
-</svg>
-```
-
-### letter-dotted.svg
-
-Un `<path>` con `stroke-dasharray` por trazo, envuelto en `<g id="path">`. Emite **rayas (lineas dashed), no puntos**, para reproducir el visual del bundle de referencia `ejemplo/trazado-letra-a/letter-dotted.svg` (capsulas de ~12×5 px orientadas a lo largo del trazo, periodo 18 px).
-
-```xml
-<svg width="100%" height="100%" viewBox="0 0 380 340" ...>
-  <g><g><g id="path">
-    <path id="path1" d="M190,85L185.12,90.45L..."
-      style="fill:none;stroke:#ccc;stroke-width:5px;stroke-linecap:round;stroke-dasharray:7,11;"/>
-    <path id="path2" d="M100,270L..."
-      style="fill:none;stroke:#ccc;stroke-width:5px;stroke-linecap:round;stroke-dasharray:7,11;"/>
-  </g></g></g>
-</svg>
-```
-
-**Contrato con el componente consumidor**:
-- Un `<path id="path{i+1}">` por trazo, dentro del wrapper `<g id="path">`.
-- `d` viene de `strokePaths[i].d` (construido por `ManualPathDrawer.handleFinalize` como `M x,y L x,y ...` sobre los puntos suavizados con `smooth(_, 2)`, antes del resample).
-- Los selectores en `letterAnimationPath` (`#path1`, `#path2`, ...) apuntan a los `<path>` individuales.
-
-**Parametros del dashing** (por defecto en `generateDottedSvg`, configurables via 4º/5º argumento):
-- `stroke-width: 5px` — espesor de la raya, match con la altura del capsule en el bundle de referencia
-- `stroke-dasharray: 7,11` — dash 7 + gap 11 en numeros raw. Con `stroke-linecap: round` y `stroke-width: 5`, los caps redondeados extienden el dash visible: `visible_dash = 7 + 5 = 12`, `visible_gap = 11 - 5 = 6`. Periodo total 18, que coincide con el del bundle de referencia.
-- `stroke: #ccc` — gris claro
-- `stroke-linecap: round` — caps redondeados que forman las capsulas
-
-> **Nota**: el bundle `ejemplo/trazado-letra-a/letter-dotted.svg` alcanza el mismo visual con **paths rellenos** (18 sub-shapes cerrados por trazo con `fill:#cecece`) en lugar de dashing. Nuestro generador produce un SVG mas compacto via `stroke-dasharray` con el mismo aspecto final (el componente consumidor renderiza igual ambos, porque el dashing de SVG es equivalente en pantalla a esas capsulas cerradas).
-
-### base.svg
+## base.svg
 
 Template SVG que replica la estructura de los componentes `LetterX` en `ejemplo/letters.js`. Lo consume el reader: hace `fetch` del archivo como texto y lo inyecta en un `<div style={{height:340}}>` via `dangerouslySetInnerHTML`, luego anima los `<path>` con `stroke-dasharray` + `stroke-dashoffset`; `#circle` es el marcador arrastrable del punto inicial; `#letterBg` el fondo clickable.
 
 ```xml
 <svg class="svg-letter" width="100%" height="100%" viewBox="0 0 380 340">
   <rect id="letterBg" x="0" y="0" width="380" height="340"/>
-  <path id="path1" class="svgPath" stroke-width="33" fill="none" d="M..."/>
-  <path id="path2" class="svgPath" stroke-width="33" fill="none" d="M..."/>
-  <circle id="circle" cx="190" cy="85" r="24"/>
+  <path id="path1" class="svgPath" stroke-width="16" fill="none" d="M..."/>
+  <path id="path2" class="svgPath" stroke-width="16" fill="none" d="M..."/>
+  <circle id="circle" cx="190" cy="85" r="12"/>
 </svg>
 ```
 
 **Contrato**:
+
 - **Sin XML prolog ni DOCTYPE.** El reader hace `innerHTML` de este fichero dentro de un `<div>` — un `<?xml ... ?>` o DOCTYPE externo dentro de un `<div>` es HTML invalido: el parser los convierte en comentario bogus y las reglas CSS (`.svg-letter .svgPath`) no aplican, dejando los paths con `fill:black` por defecto (la letra sale en negro). Se emite el mismo shape bare `<svg>` que React renderiza desde `letters.js`.
-- Un `<path id="path{i+1}" class="svgPath" stroke-width="S" fill="none">` por trazo del usuario. `d` es el mismo `strokePaths[i].d` que usan `letter-dotted.svg` y `letter-fill.svg` (suavizado con `smooth(_, 2)`).
+- Un `<path id="path{i+1}" class="svgPath" stroke-width="S" fill="none">` por trazo del usuario. `d` es `strokePaths[i].d` construido por `ManualPathDrawer.handleFinalize` como `M x,y L x,y ...` sobre los puntos suavizados con `smooth(_, 2)` (antes del resample).
 - `stroke-width="S"` se embebe como numero concreto (`effStroke` = `animationPathStroke` de `data.json`). En los componentes JSX de `letters.js` este valor llega por prop `stroke`; aqui esta baked-in para que el archivo se pueda servir estatico.
 - `fill="none"` inline como **fallback de atributo de presentacion**: la regla CSS del reader (`.svg-letter .svgPath { fill:none; stroke:#f04e23 }`) tiene mayor especificidad y sobreescribe, pero si por el motivo que sea no carga, el `fill="none"` inline evita que el path se rellene en negro.
 - `<circle id="circle" cx cy r>` en el **primer punto del primer trazo** (matching el cx/cy manual de los JSX). `r = Math.ceil(stroke / 1.4)` — misma formula que usan los componentes.
 - Atributos estaticos, no JSX: `class` (no `className`), `stroke-width` (no `strokeWidth`).
 
-### Formato SVG comun
-
-Todos los SVGs comparten:
-- DOCTYPE SVG 1.1
-- `width="100%" height="100%"`
-- `viewBox="0 0 {width} {height}"` donde width/height coinciden con `letterSize`
-- Namespace SVG y xlink
-
 ---
 
-## thum.png
+## Inputs subidos por el usuario (Paso 1)
 
-Generado automaticamente por `generateThumPngBlob` en `src/utils/thumGenerator.js` al exportar. Es la **composicion de `letter-fill.svg` + `letter-dotted.svg`**: la letra rellena en negro con las rayas dasheadas gris claro superpuestas (efecto "carretera con linea central", igual que el `thum.png` de referencia en `ejemplo/trazado-letra-a/`).
+Estos no son parte del bundle de salida, pero definen el flujo de trazado:
 
-Proceso: rasteriza `fillSvg` en un `<canvas>` como capa base, luego dibuja `dottedSvg` encima. Exporta a PNG via `canvas.toBlob`. Tamaño en pixeles = `letterSize` del `data.json`.
+### bg.svg
+
+La ilustracion de fondo: letra coloreada, flechas direccionales, numero de orden del trazo, cualquier decoracion. Se muestra como capa base en el drawer (zIndex 1) y en el preview. **No** se inspecciona programaticamente — solo se renderiza como imagen.
+
+Ver `ejemplo/trazado-letra-a/bg.svg` como forma canonica.
+
+### dotted.svg
+
+El punteado guia que indica por donde pasa el trazo. Sirve dos proposito:
+
+1. **Guia visual**: se renderiza encima de `bg.svg` (zIndex 2) en el drawer y el preview para que el usuario sepa por donde trazar.
+2. **Esqueleto de snap**: `guideExtractor.extractGuideFromSvg` lo rasteriza, binariza por pixel opaco (`alpha >= 64`), cierra los gaps entre dashes (`closePasses: 4`) y skeletoniza con Zhang-Suen para producir la polilinea contra la que se ajustan los trazos al soltar el mouse.
+
+Ver `ejemplo/trazado-letra-a/dotted.svg` como forma canonica.
 
 ---
 
@@ -227,11 +184,7 @@ Proceso: rasteriza `fillSvg` en un `<canvas>` como capa base, luego dibuja `dott
 trazado-letra-a.zip
   trazado-letra-a/
     data.json
-    letter-fill.svg
-    letter-outline.svg
-    letter-dotted.svg
     base.svg
-    thum.png
 ```
 
 ### Masiva (ZIP de todas las letras)
@@ -241,21 +194,19 @@ trazados-ligada.zip          (o trazados-mayusculas.zip)
   ligada/                    (o mayusculas/)
     trazado-letra-a/
       data.json
-      letter-fill.svg
-      letter-outline.svg
-      letter-dotted.svg
       base.svg
-      thum.png
     trazado-letra-b/
-      ...
+      data.json
+      base.svg
+    ...
 ```
 
 ### Archivos que **ya no se exportan**
 
-Desde el refactor manual-only:
 - `character.png`
 - `fondo.png`
-- `audio/es/title.mp3`
-- `audio/val/title.mp3`
+- `audio/es/title.mp3`, `audio/val/title.mp3`
+- `letter-fill.svg`, `letter-outline.svg`, `letter-dotted.svg`
+- `thum.png`
 
-Y por tanto tampoco hay placeholders (MP3 silencioso, PNG transparente) que antes los cubrian. Si la app consumidora los necesita, habra que proveerlos fuera del pipeline del generador.
+Si la app consumidora los necesita, los provee el pipeline de contenido aparte — esta herramienta unicamente emite lo que depende de los trazos dibujados (`data.json` + `base.svg`).

@@ -1,10 +1,10 @@
 # Componentes - Documentacion Detallada
 
-> **Contexto (abril 2026)**: Dibujo manual + proyeccion al soltar sobre la polilinea extraida del SVG de referencia. Los modos `font`/`svg-bundle`, el upload de fuente y los uploads de audio/imagen asset desaparecieron.
+> **Contexto (abril 2026)**: Flujo de dos-SVG-subidos. En el Paso 1 el usuario sube `bg.svg` + `dotted.svg` por letra. En el Paso 2 ambos se apilan como guia visual y el usuario dibuja encima; al soltar el trazo se proyecta sobre el esqueleto de `dotted.svg`. El bundle exportado es solo `data.json` + `base.svg`. Los modos PNG-reference, font y svg-bundle desaparecieron.
 
 ## GeneratorPage.jsx
 
-Wizard de 3 pasos (imagen → trazado → exportar).
+Wizard de 3 pasos (imagenes → trazado → exportar).
 
 ### Estado (useState)
 
@@ -12,7 +12,7 @@ Wizard de 3 pasos (imagen → trazado → exportar).
 |----------|------|---------|-------------|
 | `type` | `'ligada'|'mayusculas'` | `'ligada'` | Tipo de letra |
 | `selectedLetters` | string[] | `[]` | Array de **a lo sumo una** letra (seleccion exclusiva) |
-| `generatedTrazados` | object | `{}` | Map letra -> datos generados |
+| `generatedTrazados` | object | `{}` | Map letra → datos generados |
 | `generating` | boolean | `false` | Flag durante la generacion |
 | `currentStep` | number | 1 | Paso actual (1-3) |
 | `dotCount` | number | 0 | Puntos por trazo al resamplear (0 = usa default del drawer) |
@@ -20,13 +20,10 @@ Wizard de 3 pasos (imagen → trazado → exportar).
 | `canvasWidth` | number | 380 | Ancho del canvas |
 | `canvasHeight` | number | 340 | Alto del canvas |
 | `strokeWidth` | number | 0 | 0 = auto, >0 = forzado |
-| `dottedStrokeWidth` | number | 5 | Grosor del dash en `letter-dotted.svg` |
-| `dottedDash` | number | 7 | Longitud del dash |
-| `dottedGap` | number | 11 | Longitud del gap |
-| `manualDrawings` | object | `{}` | Map letra -> `{ dotList, strokePaths }` |
-| `images` | object | `{}` | Map letra -> dataURL de la imagen de referencia |
+| `manualDrawings` | object | `{}` | Map letra → `{ dotList, strokePaths }` |
+| `images` | object | `{}` | Map letra → `{ bg: dataURL, dotted: dataURL }` |
 
-`activeLetter = selectedLetters[0]`. `activeImage = images[activeLetter]`.
+`activeLetter = selectedLetters[0]`. `activeImages = images[activeLetter] || {}`. `activeBg = activeImages.bg`. `activeDotted = activeImages.dotted`.
 
 ### Persistencia
 
@@ -37,8 +34,8 @@ Todo se vuelca a `window.__generatorState` (incluyendo `images`) en un `useEffec
 #### `toggleLetter(letter)`
 Selecciona **una sola** letra (click en la misma la deselecciona; click en otra la reemplaza).
 
-#### `handleImageUpload(e)` / `clearImage()`
-Lee el archivo con `FileReader.readAsDataURL` — acepta `.svg`, `.png`, `.jpg`, `.jpeg` (mime `image/svg+xml`, `image/png`, `image/jpeg`). Guarda en `images[activeLetter]`.
+#### `handleSvgUpload(kind)` / `clearSvg(kind)`
+`kind` es `'bg'` o `'dotted'`. Lee el archivo con `FileReader.readAsDataURL` — acepta solo `.svg` (mime `image/svg+xml`). Guarda en `images[activeLetter][kind]`. `clearSvg` borra solo el slot correspondiente; si la letra queda sin ningun SVG se elimina la entrada entera.
 
 #### `handleManualComplete(letter, result)`
 Callback del `ManualPathDrawer`. Guarda `{ dotList, strokePaths }` en `manualDrawings[letter]`.
@@ -46,25 +43,29 @@ Callback del `ManualPathDrawer`. Guarda `{ dotList, strokePaths }` en `manualDra
 #### `generateForLetter(letter)`
 1. Lee `manualDrawings[letter]` — error si no existe
 2. Usa `canvasWidth`/`canvasHeight` tal cual
-3. `effDotSize`/`effStroke` = override 0/>0 + `computeLetterParams`
-4. `letter-fill.svg` / `letter-outline.svg`: siempre stroke-based (la imagen de referencia es raster/ilustrada, no se vectoriza). `fillStrokeWidth = max(20, effDotSize * 1.2)` para que el fill cubra bien.
-5. `letter-dotted.svg`: `generateDottedSvg(strokePaths, w, h, dottedStrokeWidth, "${dottedDash},${dottedGap}")` — el usuario controla el espesor y dash/gap.
-6. `animationPaths`: por cada stroke `{ length, time: max(2, round(length/4)) }`.
-7. Construye `data.json` via `generateDataJson`.
+3. `effDotSize`/`effStroke` = override `0/>0` + `computeLetterParams`
+4. `animationPaths`: por cada stroke `{ length, time: max(2, round(length/4)) }`
+5. `baseSvg`: `generateBaseSvg(strokePaths, w, h, effStroke)` — el unico SVG que se produce
+6. Construye `data.json` via `generateDataJson`
 
-Retorno: `{ letter, folderName, fillSvg, outlineSvg, dottedSvg, dataJson, dotList, strokePaths }`.
+Retorno: `{ letter, folderName, baseSvg, dataJson, dotList, strokePaths }`.
+
+Los campos `fillSvg`, `outlineSvg`, `dottedSvg` **ya no existen** en el resultado — la generacion de esos SVG se eliminó.
 
 #### `handleGenerate()` / `handleExportSingle(letter)` / `handleExportAll()`
-Export es async (genera `thum.png`).
+Genera el ZIP con solo `data.json` + `base.svg`.
 
 #### `handlePreview(letter)`
-Coloca `{ dataJson, fillSvg, outlineSvg, dottedSvg }` en `window.__trazadoPreview` y navega a `/preview`.
+Coloca `{ dataJson, baseSvg, bgSvg, dottedSvg }` en `window.__trazadoPreview` y navega a `/preview`. `bgSvg` y `dottedSvg` se leen de `images[letter]` (los SVG originales subidos por el usuario) para que el preview reproduzca fielmente el fondo visible durante el dibujo.
+
+#### `handlePreviewInReader(letter)`
+Escribe `data.json` + `base.svg` en el reader local via el middleware `POST /__write-reader-trazado` (registrado en `vite.config.js`) y abre la URL del reader en una pestaña nueva. Solo funciona en `npm run dev`.
 
 ### UI por Paso
 
-- **Paso 1 — Imagen**: Toggle ligada/mayusculas + grid de letras (las que tienen imagen muestran ✓) + panel de carga con preview (160×140 contain). `canAdvanceFromStep1 = activeLetter && activeImage`. El input `file` acepta `.svg,.png,.jpg,.jpeg,image/svg+xml,image/png,image/jpeg`.
-- **Paso 2 — Trazado**: Config (canvas w/h, dotCount, dotSize, strokeWidth, dottedStrokeWidth/dash/gap). Debajo, el `ManualPathDrawer` con la imagen pasada como `imageSrc`. Boton "Generar y continuar".
-- **Paso 3 — Exportar**: Lista de trazados generados con info por letra (canvas, dotSize, stroke, N trazos, puntos por trazo). Botones `Preview`, `Exportar`, `Exportar todos como ZIP`.
+- **Paso 1 — Imagenes**: Toggle ligada/mayusculas + grid de letras (las que tienen ambos SVG muestran ✓) + panel de carga con dos slots lado-a-lado (`bg.svg` y `dotted.svg`), cada uno con su preview individual 110×90. Si ambos estan cargados se muestra una vista apilada 200×170 para confirmar alineacion. Los inputs aceptan `.svg, image/svg+xml`. `canAdvanceFromStep1 = activeLetter && activeBg && activeDotted`.
+- **Paso 2 — Trazado**: Config (canvas w/h, dotCount, dotSize, strokeWidth). Debajo, el `ManualPathDrawer` con `bgSvg`/`dottedSvg` pasados como props. Boton "Generar y continuar".
+- **Paso 3 — Exportar**: Lista de trazados generados con info por letra (canvas, dotSize, stroke, N trazos, puntos por trazo). Botones `Preview`, `Preview en reader`, `Exportar`, `Exportar todos como ZIP`.
 
 ---
 
@@ -78,7 +79,8 @@ Canvas de dibujo manual con proyeccion diferida al soltar el trazo. Produce `{ d
 |------|------|---------|-------------|
 | `letter` | string | `''` | Letra (solo display) |
 | `type` | `'ligada'|'mayusculas'` | `'ligada'` | Display |
-| `imageSrc` | string | `''` | Imagen de referencia (dataURL). SVG -> extractor; PNG/JPG -> mask clasico |
+| `bgSvg` | string | `''` | dataURL de `bg.svg` — fondo visual (zIndex 1) |
+| `dottedSvg` | string | `''` | dataURL de `dotted.svg` — guia visual (zIndex 2) **y** fuente del esqueleto de snap |
 | `width`, `height` | number | 380, 340 | Dimensiones del canvas en espacio de letra |
 | `dotCount` | number | 40 | Puntos por trazo al resamplear |
 | `dotSize` | number | 33 | Solo informativo |
@@ -91,19 +93,21 @@ Canvas de dibujo manual con proyeccion diferida al soltar el trazo. Produce `{ d
 - `strokes`: trazos completados (ya proyectados sobre la guia al soltar)
 - `currentStroke`: puntos del trazo en curso (crudos, sin proyectar)
 - `cursorPos`: para el crosshair
-- `maskRef` (ref): mask raster + distance transform si se uso el fallback (PNG/JPG) o si el SVG no dio suficientes puntos
-- `guideRef` (ref): `{ centroids, edges, endpoints }` cuando se extrajo la polilinea del SVG
-- `guideDebug` (state): mismo contenido que `guideRef.current` + `dotCount`, usado para el overlay de debug
+- `maskRef` (ref): guide object completo (`{ centroids, edges, endpoints, segmentEndpoints }`) + mask raster + distance transform, o el objeto del fallback raster si la extraccion del SVG no dio suficientes puntos
+- `guideRef` (ref): `{ centroids, edges, endpoints, segmentEndpoints }` cuando se extrajo la polilinea del dotted.svg
+- `guideDebug` (state): contenido del debug para el overlay
 - `showGuideDebug` (state): toggle del overlay
-- `maskMode` (state): `'svg-dots'` | `'fallback'` | `'none'` — decide que adjuster usar en `adjustStrokeToGuide`
+- `maskMode` (state): `'skeleton'` | `'fallback'` | `'none'` — decide que adjuster usar
 
 ### Carga de la guia (useEffect)
 
-Cuando cambia `imageSrc` / `width` / `height`:
+Cuando cambia `dottedSvg` / `width` / `height`:
 
-1. Si `isSvgSource(imageSrc)` → intenta `extractGuideMaskFromImage`. Si devuelve ≥3 puntos y ≥1 edge → `guideRef = { centroids, edges, endpoints }`, `maskMode = 'svg-dots'`.
-2. En cualquier otro caso (raster, SVG degenerado, error) → `buildMaskFromImage` y `maskMode = 'fallback'`.
-3. Si tampoco eso funciona → `maskMode = 'none'`, el trazo se guarda crudo.
+1. Llama `extractGuideFromSvg(dottedSvg, width, height)`. Si devuelve ≥3 centroides y ≥1 edge → `guideRef.current = { centroids, edges, endpoints, segmentEndpoints }`, `maskMode = 'skeleton'`.
+2. Si falla → `buildMaskFromImage(dottedSvg, ...)` como fallback raster (distance transform sobre pixeles oscuros). `maskMode = 'fallback'`.
+3. Si tambien falla → `maskMode = 'none'`, el trazo se guarda crudo.
+
+`bgSvg` **no** se procesa — solo se renderiza visualmente. El esqueleto se obtiene unicamente de `dotted.svg`.
 
 ### Pipeline de dibujo
 
@@ -115,7 +119,7 @@ Realtime (durante el arrastre):
 Al soltar (`endStroke`):
 - Si el trazo tiene <2 puntos, se descarta.
 - Si no, se llama `adjustStrokeToGuide(currentStroke)`:
-  - `maskMode === 'svg-dots'` → `projectStrokeOnGuide(points, guideRef.current)` (ver `UTILITIES.md`).
+  - `maskMode === 'skeleton'` → `projectStrokeOnGuide(points, guideRef.current)` (ver `UTILITIES.md`).
   - `maskMode === 'fallback'` → `centerStrokePoints(points, maskRef.current)` (pasada iterativa por distance transform).
   - `maskMode === 'none'` → se deja como esta.
 - El trazo ajustado se agrega a `strokes`.
@@ -133,25 +137,23 @@ Al soltar (`endStroke`):
 
 - **Deshacer (Ctrl+Z)**: quita el ultimo trazo completado
 - **Limpiar (Esc)**: borra todos los trazos
-- **Centrar trazado**: re-aplica `adjustStrokeToGuide` a todos los trazos (util para repetir el ajuste o aplicarlo a un trazo que no se haya soltado por mouseUp limpio). Habilitado cuando hay trazos; usa polilinea si esta disponible, si no el fallback raster.
-- **Ver guia** (solo si hay `guideDebug`): toggle del overlay de depuracion — dibuja los edges en cian, los centroides en verde azulado oscuro, y los endpoints en naranja grande. Permite verificar visualmente la calidad de la extraccion.
+- **Centrar trazado**: re-aplica `adjustStrokeToGuide` a todos los trazos. Requiere `dottedSvg` cargado.
+- **Ver guia** (solo si hay `guideDebug`): toggle del overlay de depuracion — dibuja los edges en cian, los centroides en verde azulado oscuro, y los endpoints en naranja grande. Permite verificar visualmente la calidad de la extraccion del esqueleto.
 - **Guardar (Enter)**: dispara `handleFinalize`
 
 ### Indicador de modo
 
 En la barra de atajos:
-- `svg-dots` → "Ajuste al soltar: guia SVG (N puntos)" en verde.
-- `fallback` → "Ajuste al soltar: centrado por imagen" en naranja.
+- `skeleton` → "Ajuste al soltar: esqueleto de dotted.svg (N puntos)" en verde.
+- `fallback` → "Ajuste al soltar: centrado por imagen (esqueleto de dotted.svg no detectado)" en naranja.
 - `none` → (ningun texto).
 
 ### Visualizacion
 
 - Canvas escalado 1.4× (`transform: scale(1.4)` sobre el hijo); el borde cambia de gris a naranja al dibujar.
-- Imagen de referencia de fondo al 40% opacity con `object-fit: contain` (aspect preservado — misma geometria que usa el extractor).
-- Trazos completados: polyline naranja 70% + marcador inicio azul + marcador fin verde + numero de trazo.
-- Trazo actual: polyline naranja opaca + marcador inicio azul.
-- Crosshair gris siguiendo el cursor.
-- **Debug overlay** (cuando `showGuideDebug`): edges en cian, centroides oscuros, endpoints en naranja 4px con borde blanco.
+- **zIndex 1** — `bg.svg` como `<img>` a 100% opacidad, `object-fit: contain`.
+- **zIndex 2** — `dotted.svg` como `<img>` a 100% opacidad, `object-fit: contain`. Es la guia visible que el usuario sigue.
+- **zIndex 5** — SVG overlay con trazos completados (polyline naranja 70% + marcador inicio azul + marcador fin verde + numero), trazo actual (polyline naranja opaca), crosshair y overlay de debug de la polilinea extraida.
 
 ### Proceso de finalizacion (`handleFinalize`)
 
@@ -161,8 +163,10 @@ En la barra de atajos:
    - Formato `{ coords: [x.toFixed(3), y.toFixed(3)] }`
    - Marca esquinas donde |Δangulo| > π/4
    - `dragger` = primer punto con `toFixed(0)`
-3. `strokePaths`: `smooth(pts, 2)` -> path `"d"` con `M` + `L` -> `{ id: 'path{i+1}', d }`
-4. Llama `onComplete({ dotList, strokePaths })`
+3. `strokePaths`: `smooth(pts, 2)` → path `"d"` con `M` + `L` → `{ id: 'path{i+1}', d, points: smoothed }`.
+4. Llama `onComplete({ dotList, strokePaths })`.
+
+`strokePaths` es el unico pipeline que alimenta `base.svg`. Ya no se emite `skeletonPaths` hacia `onComplete` (el generador no lo necesita — dejo de generar `letter-dotted.svg`).
 
 ### Conversion de coordenadas
 
@@ -180,45 +184,33 @@ El contenedor renderiza el hijo scalado via `transform: scale(1.4)` y usa `box-s
 
 ### Funciones auxiliares internas
 
-- `resample(points, n)`: misma logica que `pathSampler.js` (longitud acumulada + interpolacion)
+- `resample(points, n)`: longitud acumulada + interpolacion lineal
 - `smooth(points, iterations)`: promedio ponderado 25-50-25, manteniendo extremos
 
 ---
 
 ## PreviewPage.jsx
 
-Pagina de preview interactivo. **Sin cambios notables** respecto a la version anterior.
+Pagina de preview interactivo. Simula como el componente consumidor presenta el trazado.
 
 ### Estado
 
 | Variable | Tipo | Descripcion |
 |----------|------|-------------|
-| `previewData` | object/null | `{ dataJson, fillSvg, outlineSvg, dottedSvg }` |
+| `previewData` | object/null | `{ dataJson, baseSvg, bgSvg, dottedSvg }` |
 | `stepIdx` | number | Indice del trazo actual |
 | `dotIdx` | number | Indice del siguiente punto a tocar |
 | `mousePos` | `{ x, y }` | Cursor en coordenadas de letra |
 | `tracedPath` | array | Puntos tocados del trazo actual |
 | `completedStrokes` | array | Paths de trazos anteriores |
 | `phase` | `'idle'|'ready'|'tracing'|'done'` | Fase |
-| `showFill` | boolean | Mostrar fill SVG al completar |
+| `showFill` | boolean | Tras completar oculta el overlay de dots (ya no hay fillSvg que revelar) |
 | `debugMode` | boolean | Debug visual (default `true`) |
 
 ### Carga de datos
 
-1. **Desde GeneratorPage**: lee `window.__trazadoPreview` al montar
-2. **Upload manual**: carga `data.json` + 3 SVGs via input file
-
-### Conversion de coordenadas
-
-```javascript
-screenToLetter(clientX, clientY) {
-  const rect = container.getBoundingClientRect()
-  x = (clientX - rect.left) / SCALE    // SCALE = 1.4
-  y = (clientY - rect.top) / SCALE
-}
-```
-
-Container con `box-sizing: content-box`.
+1. **Desde GeneratorPage**: lee `window.__trazadoPreview` al montar. Incluye los SVG originales subidos (`bgSvg`, `dottedSvg`).
+2. **Upload manual**: carga `data.json` + `base.svg` + opcionalmente `bg.svg` + `dotted.svg` via input file.
 
 ### Mecanica de trazado
 
@@ -227,15 +219,17 @@ Container con `box-sizing: content-box`.
    - Hit detection: `distancia < max(dotSize, 28)` px al siguiente dot
    - Al tocar un dot: se agrega a `tracedPath`, avanza `dotIdx`
    - Al completar un trazo: se archiva en `completedStrokes`, avanza `stepIdx`, resetea `dotIdx` y `tracedPath`
-3. **Phase `done`**: fade-in del fill SVG. Boton "Reiniciar".
+3. **Phase `done`**: se oculta el overlay de dots/strokes; queda visible solo el fondo (bg + dotted). Boton "Reiniciar".
 
 ### Capas visuales (z-index)
 
-1. `z-index 1`: Fill SVG (solo en `done`) o outline (guia tenue, opacity 0.15)
-2. `z-index 2`: Dotted SVG
-3. `z-index 5`: SVG overlay con trazos completados (verde), trazo actual (naranja), dots debug
-4. `z-index 8`: Punto de inicio pulsante (azul)
-5. `z-index 10`: Cursor dragger (naranja)
+1. **z-index 1**: `bg.svg` (si existe).
+2. **z-index 2**: `dotted.svg` (si existe).
+3. **z-index 5**: SVG overlay con trazos completados (verde), trazo actual (naranja), dots debug.
+4. **z-index 8**: Punto de inicio pulsante (azul).
+5. **z-index 10**: Cursor dragger (naranja).
+
+`bg.svg` y `dotted.svg` se reciben como dataURL (desde `window.__trazadoPreview`) o como texto SVG (desde upload manual). La render logica distingue por el prefijo: `data:` / `http` → `<img>`; otro → `dangerouslySetInnerHTML`.
 
 ### Panel de debug
 

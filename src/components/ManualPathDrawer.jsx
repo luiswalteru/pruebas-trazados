@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { buildMaskFromImage, centerStrokePoints } from '../utils/letterMask'
 import {
-  extractGuideMaskFromImage,
+  extractGuideFromSvg,
   projectStrokeOnGuide,
 } from '../utils/guideExtractor'
 
@@ -9,7 +9,10 @@ import {
  * ManualPathDrawer
  *
  * Allows the user to draw tracing paths manually on a canvas that shows
- * the letter shape as a visual guide.
+ * the letter shape as a visual guide built from two uploaded SVGs: a
+ * background layer (`bg.svg`) and a dashed tracing guide on top
+ * (`dotted.svg`). The user draws over this stack; the snap-to-guide uses
+ * `dotted.svg`'s skeleton.
  *
  * Mouse / touch:
  *   • Mouse-down  → starts a new stroke
@@ -26,8 +29,9 @@ import {
  * Props:
  *   letter        – the letter being drawn (for display)
  *   type          – 'ligada' | 'mayusculas'
- *   imageSrc      – optional raster image (dataURL or URL) shown as guide and
- *                   used to build the binary mask for centerline snapping
+ *   bgSvg         – data URL of the base bg.svg (rendered under the drawing)
+ *   dottedSvg     – data URL of the dashed dotted.svg (rendered over bg, also
+ *                   used to extract the snap skeleton)
  *   width         – canvas width in letter-space units
  *   height        – canvas height in letter-space units
  *   dotCount      – how many dots to resample each stroke to
@@ -38,14 +42,12 @@ import {
 export default function ManualPathDrawer({
   letter = '',
   type = 'ligada',
-  imageSrc = '',
+  bgSvg = '',
+  dottedSvg = '',
   width = 380,
   height = 340,
   dotCount = 40,
   dotSize = 33,
-  dottedStrokeWidth = 5,
-  dottedDash = 7,
-  dottedGap = 11,
   onComplete,
   onCancel,
 }) {
@@ -57,10 +59,6 @@ export default function ManualPathDrawer({
   const [cursorPos, setCursorPos] = useState(null)
   const maskRef = useRef(null)                         // rasterized letter mask for center-snapping
   const guideRef = useRef(null)                        // { centroids, edges } for polyline snap
-  // Skeleton segments extracted from the letter body. Rendered as the
-  // always-visible dashed tracing guide, and also emitted in onComplete so
-  // the generator can use them as letter-dotted.svg paths.
-  const [skeletonSegments, setSkeletonSegments] = useState([])
   // Debug state for the SVG guide extractor — lets us see which blobs were
   // classified as guide dots so thresholds can be tuned if the segmentation
   // misses or over-picks.
@@ -88,23 +86,23 @@ export default function ManualPathDrawer({
 
   const displayLetter = type === 'mayusculas' ? letter.toUpperCase() : letter.toLowerCase()
 
-  // Build the mask when the reference image (PNG) changes. The extractor
-  // isolates the white letter body, thins it to a one-pixel skeleton and
-  // exposes that as a polyline (centroids + edges) the drawn strokes snap
-  // to. If the extraction fails (not enough white pixels) we fall back to
-  // the legacy dark-pixel distance-field pull.
+  // Build the snap mask from the uploaded dotted.svg. The extractor
+  // rasterizes the SVG, treats every opaque pixel as guide-body, closes the
+  // dash gaps and skeletonizes — the resulting polyline is what the drawn
+  // strokes snap to. If the SVG can't be parsed as a polyline (too few
+  // skeleton pixels) we fall back to a raster distance-field pull from the
+  // same SVG so the "Centrar trazado" button still does something useful.
   useEffect(() => {
     let cancelled = false
     maskRef.current = null
     guideRef.current = null
     setGuideDebug(null)
     setMaskMode('none')
-    setSkeletonSegments([])
-    if (!imageSrc) return
+    if (!dottedSvg) return
 
     const run = async () => {
       try {
-        const guide = await extractGuideMaskFromImage(imageSrc, width, height)
+        const guide = await extractGuideFromSvg(dottedSvg, width, height)
         if (cancelled) return
         if (guide && guide.edges.length > 0 && guide.centroids.length >= 3) {
           maskRef.current = guide
@@ -116,13 +114,12 @@ export default function ManualPathDrawer({
           }
           setGuideDebug(guide.debug)
           setMaskMode('skeleton')
-          setSkeletonSegments(guide.segments || [])
           return
         }
       } catch (_) { /* fall through to raster fallback */ }
 
       try {
-        const mask = await buildMaskFromImage(imageSrc, width, height)
+        const mask = await buildMaskFromImage(dottedSvg, width, height)
         if (cancelled) return
         maskRef.current = mask
         setMaskMode('fallback')
@@ -133,7 +130,7 @@ export default function ManualPathDrawer({
     run()
 
     return () => { cancelled = true }
-  }, [imageSrc, width, height])
+  }, [dottedSvg, width, height])
 
   // ---- Coordinate conversion ------------------------------------------------
   const toLetterCoords = useCallback((clientX, clientY) => {
@@ -317,9 +314,8 @@ export default function ManualPathDrawer({
       return { dragger, coordinates }
     })
 
-    // Per-user-stroke SVG path strings. Points are kept so the generator can
-    // match each user stroke to the closest skeleton segment when it builds
-    // letter-dotted.svg.
+    // Per-user-stroke SVG path strings. These are the paths baked into
+    // base.svg as `<path id="pathN">` — the only SVG the generator emits now.
     const strokePaths = allStrokes.map((pts, i) => {
       const smoothed = smooth(pts, 2)
       let d = `M${smoothed[0].x.toFixed(2)},${smoothed[0].y.toFixed(2)}`
@@ -329,17 +325,8 @@ export default function ManualPathDrawer({
       return { id: `path${i + 1}`, d, points: smoothed }
     })
 
-    // Skeleton segments are the same across the lifetime of this PNG — pass
-    // them along so the generator can use them as the dashed letter-dotted.svg
-    // paths.
-    const skeletonPaths = (skeletonSegments || []).map((seg, i) => ({
-      id: `path${i + 1}`,
-      d: seg.d,
-      points: seg.points,
-    }))
-
-    onComplete?.({ dotList, strokePaths, skeletonPaths })
-  }, [strokes, currentStroke, dotCount, onComplete, skeletonSegments])
+    onComplete?.({ dotList, strokePaths })
+  }, [strokes, currentStroke, dotCount, onComplete])
 
   // ---- Rendering ------------------------------------------------------------
   const allVisibleStrokes = [...strokes]
@@ -361,10 +348,10 @@ export default function ManualPathDrawer({
           <button
             className="btn btn-sm"
             onClick={centerStrokes}
-            disabled={(strokes.length === 0 && currentStroke.length < 2) || !imageSrc}
-            title={!imageSrc
-              ? 'Requiere cargar una imagen de referencia en el paso 1'
-              : 'Suaviza temblores y centra el trazado en el cuerpo de la letra'}
+            disabled={(strokes.length === 0 && currentStroke.length < 2) || !dottedSvg}
+            title={!dottedSvg
+              ? 'Requiere cargar dotted.svg en el paso 1'
+              : 'Suaviza temblores y centra el trazado sobre la guía'}
           >
             Centrar trazado
           </button>
@@ -398,12 +385,12 @@ export default function ManualPathDrawer({
         <span><kbd>Esc</kbd> limpiar</span>
         {maskMode === 'skeleton' && (
           <span style={{ color: '#2e7d32' }}>
-            Ajuste al soltar: esqueleto del cuerpo de la letra ({guideDebug?.dotCount} puntos)
+            Ajuste al soltar: esqueleto de dotted.svg ({guideDebug?.dotCount} puntos)
           </span>
         )}
         {maskMode === 'fallback' && (
           <span style={{ color: '#e65100' }}>
-            Ajuste al soltar: centrado por imagen (cuerpo blanco no detectado)
+            Ajuste al soltar: centrado por imagen (esqueleto de dotted.svg no detectado)
           </span>
         )}
       </div>
@@ -441,17 +428,34 @@ export default function ManualPathDrawer({
           width, height,
           position: 'relative',
         }}>
-          {/* Reference image guide — the user draws over this */}
-          {imageSrc && (
+          {/* Background layer (bg.svg) — rendered underneath everything */}
+          {bgSvg && (
             <img
-              src={imageSrc}
+              src={bgSvg}
               alt=""
               draggable={false}
               style={{
                 position: 'absolute', inset: 0, zIndex: 1,
                 width: '100%', height: '100%',
                 objectFit: 'contain',
-                opacity: 0.4,
+                pointerEvents: 'none',
+                userSelect: 'none',
+              }}
+            />
+          )}
+
+          {/* Dotted guide (dotted.svg) — layered over bg.svg, this is the
+              visible tracing guide the user follows. Also the source of the
+              snap skeleton (extractGuideFromSvg runs against this). */}
+          {dottedSvg && (
+            <img
+              src={dottedSvg}
+              alt=""
+              draggable={false}
+              style={{
+                position: 'absolute', inset: 0, zIndex: 2,
+                width: '100%', height: '100%',
+                objectFit: 'contain',
                 pointerEvents: 'none',
                 userSelect: 'none',
               }}
@@ -463,25 +467,6 @@ export default function ManualPathDrawer({
             style={{ position: 'absolute', inset: 0, zIndex: 5, pointerEvents: 'none' }}
             viewBox={`0 0 ${width} ${height}`}
           >
-            {/* Dashed tracing guide — rendered from the skeleton segments of
-                the letter body. Same visual style that will be exported as
-                letter-dotted.svg, so "what you see here is what you get". */}
-            {skeletonSegments.length > 0 && (
-              <g opacity="0.85">
-                {skeletonSegments.map((seg, i) => (
-                  <path
-                    key={`guide-${i}`}
-                    d={seg.d}
-                    fill="none"
-                    stroke="#ccc"
-                    strokeWidth={dottedStrokeWidth}
-                    strokeDasharray={`${dottedDash},${dottedGap}`}
-                    strokeLinecap="round"
-                  />
-                ))}
-              </g>
-            )}
-
             {/* Completed strokes */}
             {strokes.map((stroke, si) => (
               <g key={si}>

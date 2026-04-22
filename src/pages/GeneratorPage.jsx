@@ -1,74 +1,11 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import {
-  generateDottedSvg,
-  generateFillSvgFromStrokes,
-  generateOutlineSvgFromStrokes,
-  generateBaseSvg,
-} from '../utils/svgGenerator'
+import { generateBaseSvg } from '../utils/svgGenerator'
 import { generateDataJson, getFolderName, SPANISH_LETTERS, SPECIAL_COMBOS, computeLetterParams } from '../utils/dataGenerator'
 import { downloadSingleTrazado, exportAllTrazados, writeTrazadoToReader } from '../utils/exportUtils'
 import ManualPathDrawer from '../components/ManualPathDrawer'
 
 const ALL_LETTERS = [...SPANISH_LETTERS, ...SPECIAL_COMBOS]
-
-/**
- * Align the skeleton segments (auto-extracted from the PNG) to the user's
- * stroke drawing order. The downstream `letter-dotted.svg` uses selectors
- * `#path1`, `#path2`, ... and the data.json `letterAnimationPath` entries
- * reference those same selectors by index, so both must stay in sync.
- *
- * Strategy:
- *   • For each user stroke, find the best-matching unused skeleton segment
- *     by end-to-end distance (trying both orientations, keeping the minimum).
- *   • If the user drew more strokes than the skeleton has segments, the
- *     unmatched ones fall back to the user's own drawn path — avoids leaving
- *     a stroke without any dotted guide in the export.
- *   • Any leftover skeleton segments are appended at the end (unlikely to be
- *     referenced by animations but still emitted so the guide is visually
- *     complete if the player falls back to the raw dotted SVG).
- */
-function alignSkeletonToStrokes(skeletonPaths, strokePaths) {
-  if (!skeletonPaths || skeletonPaths.length === 0) return strokePaths
-  if (!strokePaths || strokePaths.length === 0) {
-    return skeletonPaths.map((p, i) => ({ id: `path${i + 1}`, d: p.d }))
-  }
-  const used = new Array(skeletonPaths.length).fill(false)
-  const result = []
-  for (let i = 0; i < strokePaths.length; i++) {
-    const us = strokePaths[i]
-    const usPts = us.points || []
-    const usFirst = usPts[0]
-    const usLast = usPts[usPts.length - 1]
-    let bestIdx = -1
-    let bestScore = Infinity
-    if (usFirst && usLast) {
-      for (let j = 0; j < skeletonPaths.length; j++) {
-        if (used[j]) continue
-        const sk = skeletonPaths[j]
-        const skFirst = sk.points?.[0]
-        const skLast = sk.points?.[sk.points.length - 1]
-        if (!skFirst || !skLast) continue
-        const s1 = dist(usFirst, skFirst) + dist(usLast, skLast)
-        const s2 = dist(usFirst, skLast) + dist(usLast, skFirst)
-        const s = Math.min(s1, s2)
-        if (s < bestScore) { bestScore = s; bestIdx = j }
-      }
-    }
-    if (bestIdx >= 0) {
-      used[bestIdx] = true
-      result.push({ id: `path${result.length + 1}`, d: skeletonPaths[bestIdx].d })
-    } else {
-      result.push({ id: `path${result.length + 1}`, d: us.d })
-    }
-  }
-  for (let j = 0; j < skeletonPaths.length; j++) {
-    if (!used[j]) result.push({ id: `path${result.length + 1}`, d: skeletonPaths[j].d })
-  }
-  return result
-}
-
-function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y) }
 
 // Persist generator state across navigations so returning from Preview restores it
 const _persisted = window.__generatorState || {}
@@ -91,10 +28,6 @@ export default function GeneratorPage() {
   const [canvasWidth, setCanvasWidth] = useState(_persisted.canvasWidth || 380)
   const [canvasHeight, setCanvasHeight] = useState(_persisted.canvasHeight || 340)
   const [strokeWidth, setStrokeWidth] = useState(_persisted.strokeWidth ?? 0)
-  // letter-dotted.svg style controls (match the image's dotted-line look)
-  const [dottedStrokeWidth, setDottedStrokeWidth] = useState(_persisted.dottedStrokeWidth ?? 5)
-  const [dottedDash, setDottedDash] = useState(_persisted.dottedDash ?? 7)
-  const [dottedGap, setDottedGap] = useState(_persisted.dottedGap ?? 11)
 
   // Manual drawing state
   const [manualDrawings, setManualDrawings] = useState(_persisted.manualDrawings || {})  // { letter: { dotList, strokePaths } }
@@ -102,10 +35,16 @@ export default function GeneratorPage() {
   // one at a time is allowed), so we derive it from selectedLetters[0].
   const activeLetter = selectedLetters[0] || null
 
-  // Per-letter reference images: { [letter]: dataURL }
+  // Per-letter reference SVGs: { [letter]: { bg: dataURL, dotted: dataURL } }.
+  // bg.svg is the background illustration, dotted.svg is the dashed tracing
+  // guide rendered on top. Both are required before the user can advance to
+  // Step 2.
   const [images, setImages] = useState(_persisted.images || {})
-  const imageInputRef = useRef(null)
-  const activeImage = activeLetter ? images[activeLetter] : ''
+  const bgInputRef = useRef(null)
+  const dottedInputRef = useRef(null)
+  const activeImages = activeLetter ? (images[activeLetter] || {}) : {}
+  const activeBg = activeImages.bg || ''
+  const activeDotted = activeImages.dotted || ''
 
   // Persist state on every change so it survives navigation
   useEffect(() => {
@@ -113,7 +52,6 @@ export default function GeneratorPage() {
       type, selectedLetters, generatedTrazados,
       currentStep, dotCount, dotSize, canvasWidth, canvasHeight, strokeWidth,
       manualDrawings, images,
-      dottedStrokeWidth, dottedDash, dottedGap,
     }
   })
 
@@ -122,25 +60,34 @@ export default function GeneratorPage() {
     setSelectedLetters(prev => (prev[0] === letter ? [] : [letter]))
   }, [])
 
-  // Reference image upload for the active letter
-  const handleImageUpload = useCallback((e) => {
+  // Reference SVG upload for the active letter. `kind` is 'bg' or 'dotted' —
+  // both must be set before the user can advance to Step 2. The dotted SVG is
+  // used as the snap skeleton by the drawer.
+  const handleSvgUpload = useCallback((kind) => (e) => {
     const file = e.target.files[0]
     if (!file || !activeLetter) return
     const reader = new FileReader()
     reader.onload = () => {
-      setImages(prev => ({ ...prev, [activeLetter]: reader.result }))
+      setImages(prev => ({
+        ...prev,
+        [activeLetter]: { ...(prev[activeLetter] || {}), [kind]: reader.result },
+      }))
     }
-    reader.onerror = () => alert('Error al leer la imagen')
+    reader.onerror = () => alert('Error al leer el SVG')
     reader.readAsDataURL(file)
     // Reset input so uploading the same file again re-triggers onChange
     e.target.value = ''
   }, [activeLetter])
 
-  const clearImage = useCallback(() => {
+  const clearSvg = useCallback((kind) => () => {
     if (!activeLetter) return
     setImages(prev => {
+      const curr = prev[activeLetter] || {}
+      const nextForLetter = { ...curr }
+      delete nextForLetter[kind]
       const next = { ...prev }
-      delete next[activeLetter]
+      if (Object.keys(nextForLetter).length === 0) delete next[activeLetter]
+      else next[activeLetter] = nextForLetter
       return next
     })
   }, [activeLetter])
@@ -150,7 +97,10 @@ export default function GeneratorPage() {
     setManualDrawings(prev => ({ ...prev, [letter]: result }))
   }, [])
 
-  // Generate trazado for a single letter from the manual drawing
+  // Generate trazado for a single letter from the manual drawing. The bundle
+  // is now just data.json + base.svg — letter-fill/outline/dotted.svg and
+  // thum.png are no longer produced (bg.svg and dotted.svg are uploaded
+  // directly in Step 1 and, for this flow, only used as drawing guides).
   const generateForLetter = useCallback((letter) => {
     const manual = manualDrawings[letter]
     if (!manual) {
@@ -160,38 +110,14 @@ export default function GeneratorPage() {
     const w = canvasWidth
     const h = canvasHeight
 
-    // Compute dynamic dotSize & animationPathStroke
-    // Use user-provided values if > 0, otherwise auto-compute
+    // Compute dynamic dotSize & animationPathStroke. User-provided values > 0
+    // take precedence; 0 falls back to the auto-computed recommendation.
     const letterParams = computeLetterParams(letter, type, w)
     const effDotSize = (dotSize > 0) ? dotSize : letterParams.dotSize
     const effStroke  = (strokeWidth > 0) ? strokeWidth : letterParams.animationPathStroke
 
     const dotList = manual.dotList
     const strokePaths = manual.strokePaths || []
-    const skeletonPaths = manual.skeletonPaths || []
-
-    // letter-fill.svg and letter-outline.svg: both approximations rebuilt
-    // from the user's drawn strokes. The uploaded PNG is a raster reference
-    // only — it never becomes part of the exported bundle.
-    const fillStrokeWidth = Math.max(20, effDotSize * 1.2)
-    const fillSvg = generateFillSvgFromStrokes(strokePaths, w, h, fillStrokeWidth)
-    // Outline uses the same body width as fill so its silhouette matches;
-    // the black rim thickness (3 px each side) is cosmetic.
-    const outlineSvg = generateOutlineSvgFromStrokes(strokePaths, w, h, fillStrokeWidth, 3)
-
-    // letter-dotted.svg: dashed paths taken from the skeleton of the uploaded
-    // PNG (the centerline of the letter's thickness), reordered to line up
-    // with the user's stroke drawing sequence so #path1/#path2/... selectors
-    // match letterAnimationPath entries in data.json. Falls back to the raw
-    // user strokes if the skeleton couldn't be extracted. stroke-linecap:round
-    // turns the 7,11 dashes into 12-unit capsules with ~6-unit gaps, matching
-    // the reference letter-dotted.svg's look.
-    const dottedPaths = alignSkeletonToStrokes(skeletonPaths, strokePaths)
-    const dottedSvg = generateDottedSvg(
-      dottedPaths, w, h,
-      dottedStrokeWidth,
-      `${dottedDash},${dottedGap}`,
-    )
 
     const animationPaths = strokePaths.map((p, i) => ({
       length: dotList[i]?.coordinates?.length || 40,
@@ -218,15 +144,12 @@ export default function GeneratorPage() {
     return {
       letter,
       folderName,
-      fillSvg,
-      outlineSvg,
-      dottedSvg,
       baseSvg,
       dataJson,
       dotList,
       strokePaths,
     }
-  }, [type, manualDrawings, canvasWidth, canvasHeight, dotSize, strokeWidth, dottedStrokeWidth, dottedDash, dottedGap])
+  }, [type, manualDrawings, canvasWidth, canvasHeight, dotSize, strokeWidth])
 
   // Generate all selected
   const handleGenerate = useCallback(async () => {
@@ -261,19 +184,22 @@ export default function GeneratorPage() {
     await exportAllTrazados(trazadosList, type)
   }, [generatedTrazados, type])
 
-  // Preview single
+  // Preview single. The preview uses the uploaded bg.svg + dotted.svg as the
+  // visual backdrop (since we no longer generate letter-fill/outline/dotted)
+  // and `base.svg` for the animated stroke path.
   const handlePreview = useCallback((letter) => {
     const trazado = generatedTrazados[letter]
     if (!trazado || trazado.error) return
+    const uploaded = images[letter] || {}
     const previewData = {
       dataJson: trazado.dataJson,
-      fillSvg: trazado.fillSvg,
-      outlineSvg: trazado.outlineSvg,
-      dottedSvg: trazado.dottedSvg,
+      baseSvg: trazado.baseSvg,
+      bgSvg: uploaded.bg || '',
+      dottedSvg: uploaded.dotted || '',
     }
     window.__trazadoPreview = previewData
     navigate('/preview')
-  }, [generatedTrazados, navigate])
+  }, [generatedTrazados, images, navigate])
 
   // "Preview en reader": write the 5 files into public/reader/libro/assets/
   // trazados/{type}/{folderName}/ via the dev-server middleware, then open
@@ -298,7 +224,7 @@ export default function GeneratorPage() {
     }
   }, [generatedTrazados, type])
 
-  const canAdvanceFromStep1 = !!activeLetter && !!activeImage
+  const canAdvanceFromStep1 = !!activeLetter && !!activeBg && !!activeDotted
   const canGenerate = !generating
     && selectedLetters.length > 0
     && selectedLetters.every(l => manualDrawings[l])
@@ -352,25 +278,29 @@ export default function GeneratorPage() {
           </div>
 
           <div className="letter-grid">
-            {ALL_LETTERS.map(letter => (
-              <button
-                key={letter}
-                className={`letter-btn ${selectedLetters.includes(letter) ? 'selected' : ''} ${images[letter] ? 'has-image' : ''}`}
-                onClick={() => toggleLetter(letter)}
-                title={images[letter] ? 'Imagen cargada' : ''}
-              >
-                <span className="letter-display">
-                  {type === 'mayusculas' ? letter.toUpperCase() : letter}
-                </span>
-                <small className="letter-name">{letter}{images[letter] ? ' ✓' : ''}</small>
-              </button>
-            ))}
+            {ALL_LETTERS.map(letter => {
+              const imgs = images[letter] || {}
+              const ready = !!imgs.bg && !!imgs.dotted
+              return (
+                <button
+                  key={letter}
+                  className={`letter-btn ${selectedLetters.includes(letter) ? 'selected' : ''} ${ready ? 'has-image' : ''}`}
+                  onClick={() => toggleLetter(letter)}
+                  title={ready ? 'bg.svg y dotted.svg cargados' : (imgs.bg || imgs.dotted ? 'Falta uno de los dos SVG' : '')}
+                >
+                  <span className="letter-display">
+                    {type === 'mayusculas' ? letter.toUpperCase() : letter}
+                  </span>
+                  <small className="letter-name">{letter}{ready ? ' ✓' : ''}</small>
+                </button>
+              )
+            })}
           </div>
 
-          {/* Image upload for the selected letter */}
+          {/* Two-SVG upload panel for the selected letter */}
           <div className="image-upload-panel" style={{ marginTop: 24, padding: 16, background: '#f5f5f5', borderRadius: 8 }}>
             <h3 style={{ marginBottom: 12, fontSize: '1rem' }}>
-              Imagen de referencia
+              Imágenes de referencia (bg.svg + dotted.svg)
               {activeLetter && (
                 <span style={{ color: '#f04e23', marginLeft: 8 }}>
                   — letra {type === 'mayusculas' ? activeLetter.toUpperCase() : activeLetter}
@@ -380,49 +310,81 @@ export default function GeneratorPage() {
 
             {!activeLetter && (
               <p style={{ color: '#888', fontSize: '0.9rem' }}>
-                Selecciona primero una letra para poder cargar su imagen.
+                Selecciona primero una letra para poder cargar sus SVG.
               </p>
             )}
 
             {activeLetter && (
               <>
                 <p style={{ fontSize: '0.85rem', color: '#666', marginBottom: 12 }}>
-                  Carga la imagen PNG de referencia (cuerpo de la letra en
-                  blanco sobre fondo de color, con flechas y número de orden
-                  opcionales). Se detecta automáticamente el cuerpo blanco y
-                  se obtiene su esqueleto para ajustar los trazos al soltar.
+                  Carga dos archivos SVG por letra: <b>bg.svg</b> (la base que
+                  se ve detrás) y <b>dotted.svg</b> (la línea punteada que
+                  indica por dónde debe pasar el trazo). El dotted.svg se
+                  utiliza además como esqueleto para ajustar los trazos al
+                  soltar el cursor.
                 </p>
-                <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-                  <input
-                    ref={imageInputRef}
-                    type="file"
-                    accept=".png,image/png"
-                    onChange={handleImageUpload}
-                    style={{ display: 'none' }}
-                  />
-                  <button className="btn btn-secondary" onClick={() => imageInputRef.current?.click()}>
-                    {activeImage ? 'Reemplazar imagen' : 'Cargar imagen'}
-                  </button>
-                  {activeImage && (
-                    <button className="btn btn-sm" onClick={clearImage}>Quitar imagen</button>
-                  )}
-                  {activeImage && (
-                    <div style={{
-                      width: 160, height: 140,
-                      background: '#fff',
-                      border: '1px solid #ddd',
-                      borderRadius: 6,
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
-                      overflow: 'hidden',
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                  {[
+                    { key: 'bg', label: 'bg.svg (base)', value: activeBg, ref: bgInputRef },
+                    { key: 'dotted', label: 'dotted.svg (guía)', value: activeDotted, ref: dottedInputRef },
+                  ].map(slot => (
+                    <div key={slot.key} style={{
+                      padding: 12, background: '#fff', border: '1px solid #ddd', borderRadius: 6,
                     }}>
-                      <img
-                        src={activeImage}
-                        alt=""
-                        style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
-                      />
+                      <div style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: 8 }}>
+                        {slot.label} {slot.value && <span style={{ color: '#2e7d32' }}>✓</span>}
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+                        <input
+                          ref={slot.ref}
+                          type="file"
+                          accept=".svg,image/svg+xml"
+                          onChange={handleSvgUpload(slot.key)}
+                          style={{ display: 'none' }}
+                        />
+                        <button className="btn btn-sm btn-secondary" onClick={() => slot.ref.current?.click()}>
+                          {slot.value ? 'Reemplazar' : 'Cargar'}
+                        </button>
+                        {slot.value && (
+                          <button className="btn btn-sm" onClick={clearSvg(slot.key)}>Quitar</button>
+                        )}
+                        {slot.value && (
+                          <div style={{
+                            width: 110, height: 90,
+                            background: '#fafafa',
+                            border: '1px solid #eee',
+                            borderRadius: 4,
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            overflow: 'hidden',
+                          }}>
+                            <img
+                              src={slot.value}
+                              alt=""
+                              style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
+                            />
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  )}
+                  ))}
                 </div>
+
+                {activeBg && activeDotted && (
+                  <div style={{
+                    marginTop: 12, padding: 10, background: '#fff',
+                    border: '1px solid #ddd', borderRadius: 6,
+                  }}>
+                    <div style={{ fontSize: '0.75rem', color: '#888', marginBottom: 6 }}>Vista previa apilada:</div>
+                    <div style={{
+                      position: 'relative', width: 200, height: 170,
+                      background: '#fafafa', border: '1px solid #eee', borderRadius: 4,
+                      margin: '0 auto', overflow: 'hidden',
+                    }}>
+                      <img src={activeBg} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }} />
+                      <img src={activeDotted} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }} />
+                    </div>
+                  </div>
+                )}
               </>
             )}
           </div>
@@ -465,18 +427,6 @@ export default function GeneratorPage() {
               <label>Grosor del trazo de animación</label>
               <input type="number" value={strokeWidth} onChange={e => setStrokeWidth(Number(e.target.value))} min={0} max={30} />
             </div>
-            <div className="config-group">
-              <label>Punteado: grosor (px)</label>
-              <input type="number" value={dottedStrokeWidth} onChange={e => setDottedStrokeWidth(Number(e.target.value))} min={1} max={40} />
-            </div>
-            <div className="config-group">
-              <label>Punteado: longitud de dash</label>
-              <input type="number" value={dottedDash} onChange={e => setDottedDash(Number(e.target.value))} min={0} max={80} step="0.1" />
-            </div>
-            <div className="config-group">
-              <label>Punteado: longitud de gap</label>
-              <input type="number" value={dottedGap} onChange={e => setDottedGap(Number(e.target.value))} min={0} max={80} step="0.1" />
-            </div>
           </div>
 
           {activeLetter && (
@@ -499,14 +449,12 @@ export default function GeneratorPage() {
                 key={activeLetter}
                 letter={activeLetter}
                 type={type}
-                imageSrc={activeImage}
+                bgSvg={activeBg}
+                dottedSvg={activeDotted}
                 width={canvasWidth}
                 height={canvasHeight}
                 dotCount={dotCount}
                 dotSize={dotSize}
-                dottedStrokeWidth={dottedStrokeWidth}
-                dottedDash={dottedDash}
-                dottedGap={dottedGap}
                 onComplete={(result) => handleManualComplete(activeLetter, result)}
               />
             </div>

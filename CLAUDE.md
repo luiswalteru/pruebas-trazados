@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Standalone Vite + React tool for generating interactive letter-tracing ("trazados") exercises for an educational infantil app. For each letter of the Spanish alphabet (plus `ch`, `ll`, and `ñ` → `ny` for folder names) it produces the bundle consumed by the downstream React player: `data.json`, three SVGs (`letter-fill`, `letter-outline`, `letter-dotted`), a `base.svg` template that mirrors the `LetterX` React components in `ejemplo/letters.js`, and an auto-generated `thum.png`. Output ships in two variants: `ligada` (cursive lowercase) and `mayusculas` (uppercase).
+Standalone Vite + React tool for generating interactive letter-tracing ("trazados") exercises for an educational infantil app. For each letter of the Spanish alphabet (plus `ch`, `ll`, and `ñ` → `ny` for folder names) it produces the two files the downstream React player needs that depend on the user's drawing: `data.json` + `base.svg`. Output ships in two variants: `ligada` (cursive lowercase) and `mayusculas` (uppercase).
+
+The ilustrated assets that accompany each trazado (`bg.svg` background + `dotted.svg` dashed guide, and optionally character art / audio) are authored upstream and shipped by the content pipeline. This tool **consumes** `bg.svg` + `dotted.svg` as inputs to drive the drawing experience (visual guide + skeleton for snap), but does **not** re-emit them.
 
 Destination path in the downstream app is `public/lecto_pruebas_2026/assets/trazados/{ligada|mayusculas}/trazado-letra-{name}/`.
 
@@ -27,115 +29,126 @@ npx vite build --outDir /tmp/trazados-dist
 
 ## Architecture
 
-### Manual drawing over a PNG reference scene
+### Two-SVG upload flow
 
-The app is manual-only and accepts **only PNG** reference images. The expected shape is the one in `ejemplo/trazado-letra-a/trazado_a.png`: the letter body in near-white pixels on a coloured background, plus directional arrows, a starting number and any decorative accent dots. Those extra marks are visual hints for the user; the extractor intentionally ignores everything that isn't white.
+Step 1 asks for **two SVGs per letter**, not one raster:
 
-Older versions accepted SVG uploads (which were emitted verbatim as `letter-outline.svg`) and raster images with dark letters on a light background. Both are gone — uploads are PNG-only and **every output SVG is rebuilt from the user's drawn strokes**.
+- **`bg.svg`** — the ilustration (coloured letter body, directional arrows, order number, decorative characters). Shown as a visual background, never inspected programmatically.
+- **`dotted.svg`** — the dashed guide showing where the stroke should go. Shown on top of `bg.svg` as the visible trace guide, **and** rasterized internally to extract the skeleton the drawn strokes will snap to.
 
-Older versions also supported `font` (opentype.js skeletonization) and `svg-bundle` (upload fill/outline/dotted SVGs) modes. Both are gone — `src/utils/pathSampler.js` and most of `src/utils/fontParser.js` are dead code retained only as reference.
+Older iterations accepted a single PNG with the letter body in near-white on a coloured background and extracted the skeleton from that white body. That flow is gone. The `'white-body'` mode of `extractGuideMaskFromImage` is still in the file but has no active callers — it's kept only so the parametrization of `extractGuideFromSvg` (`'any-opaque'` mode) doesn't require a full rewrite.
 
-A loaded reference image has these effects:
-1. Rendered under the drawing canvas as a visual guide (40% opacity).
-2. Passed through `guideExtractor.extractGuideMaskFromImage`, which rasterizes it at 2× canvas resolution, thresholds near-white opaque pixels (`min(R,G,B) >= 230`), keeps only connected components at least ~5% the size of the largest white blob (so the "a" body and the accent dot over an "i" both stay, but anti-alias specks and stray whites don't), runs **Zhang-Suen thinning** to produce a one-pixel-wide skeleton, and exposes that skeleton directly as the guide polyline: each skeleton pixel is a centroid, 8-connected neighbours become edges, and degree-1 vertices are endpoints.
-3. If extraction fails (fewer than ~3 skeleton pixels, or no white body detected): falls back to `buildMaskFromImage`, a plain dark-pixel mask + distance transform — acts as a degraded centering pull.
+Older iterations also supported `font` (opentype.js skeletonization) and `svg-bundle` (upload fill/outline/dotted SVGs) modes. Both are gone — `src/utils/pathSampler.js` and `src/utils/fontParser.js` are dead code retained only as reference.
 
 ### Route layout
 
 SPA with 3 routes (`react-router-dom` v6):
+
 - `/` — `HomePage` (minimal landing with a single "Comenzar a Generar" link)
-- `/generator` — `GeneratorPage` (3-step wizard: imagen → trazado → exportar)
+- `/generator` — `GeneratorPage` (3-step wizard: imagenes → trazado → exportar)
 - `/preview` — `PreviewPage` (interactive preview that simulates the downstream player)
 
 All styling lives in a single `src/App.css`. No CSS modules.
 
 ### The drawing pipeline (deferred snap)
 
-`ManualPathDrawer` lets the user draw freely with the cursor. **The snap to the dotted guide runs once, on mouse release** — not per-sample. This was a deliberate change: per-sample snapping felt fought the user and occasionally teleported onto the wrong side of a cursive-letter loop.
+`ManualPathDrawer` lets the user draw freely with the cursor. **The snap to the dotted guide runs once, on mouse release** — not per-sample. This was a deliberate change: per-sample snapping fought the user and occasionally teleported onto the wrong side of a cursive-letter loop.
 
 Realtime (during drawing):
+
 1. **EMA toward raw pointer** (`SMOOTH_ALPHA = 0.5`) — low-pass against hand jitter.
 2. **Minimum-distance gate** (~1.2 px) — don't oversample.
 3. Store point as-is. No snap, no mask lookup.
 
 On `endStroke`:
+
 - `adjustStrokeToGuide(points)` decides which adjuster to run based on the guide mode:
-  - **`skeleton`** (polyline available from the white-body skeleton): `projectStrokeOnGuide(points, guide)` — snaps the first point to the nearest polyline endpoint if one is within 50 px, projects every subsequent point onto the nearest polyline segment with a **direction-aware lateral bias** (see below), snaps the last point to an endpoint if close, and runs two passes of neighbour-averaging to clean up sample-to-sample segment-switch jitter.
-  - **`fallback`** (raster mask, no polyline): `centerStrokePoints(points, maskInfo)` — the legacy iterative distance-transform pull.
+  - **`skeleton`** (polyline extracted from `dotted.svg`): `projectStrokeOnGuide(points, guide)` — snaps the first point to the nearest polyline endpoint if one is within 20 px, projects every subsequent point onto the nearest polyline segment with a **direction-aware lateral bias** (see below), snaps the last point to an endpoint if close, and runs two passes of neighbour-averaging to clean up sample-to-sample segment-switch jitter.
+  - **`fallback`** (raster mask from `dotted.svg`, polyline extraction failed): `centerStrokePoints(points, maskInfo)` — the legacy iterative distance-transform pull.
   - **`none`** (no guide at all): stroke stored as-is.
 
 **Direction-aware lateral bias** in `snapToPolyline` is the key to staying on the correct side when the polyline folds near itself (cursive "a", etc.):
+
 - Motion direction is estimated from the **raw cursor path** (not the already-projected history — otherwise a single mis-projection becomes a feedback loop).
 - Walk backwards through `rawHistory` accumulating arc length until ≥15 px; use that span's tangent.
 - Score for a candidate projection = `d²(proj, cursor) + 2.5·lateral² + 0.4·max(0,−forward)²`, where forward/lateral are decomposed relative to the tip's direction. Forward motion is free; sideways jumps across the letter's body are heavily penalised.
 
-At finalize time (`handleFinalize`): for each already-adjusted stroke, `resample` to `dotCount` equidistant points, mark corners (angle delta > π/4), `toFixed(3)` coords, `toFixed(0)` on the first point for the `dragger`. `strokePaths` are built separately with a lighter `smooth(_, 2)` for `letter-fill.svg`, `letter-outline.svg` and `thum.png`. **`skeletonPaths`** (auto-extracted from the PNG's white-body skeleton at step-2 entry) are also emitted from the drawer; these are what `letter-dotted.svg` uses.
+At finalize time (`handleFinalize`): for each already-adjusted stroke, `resample` to `dotCount` equidistant points, mark corners (angle delta > π/4), `toFixed(3)` coords, `toFixed(0)` on the first point for the `dragger`. `strokePaths` are built separately with a lighter `smooth(_, 2)` for `base.svg`. **The drawer no longer emits `skeletonPaths`** (no `letter-dotted.svg` is produced any more).
 
-### Automatic dashed tracing guide (Step 2)
+### Skeleton extraction from `dotted.svg`
 
-When the user enters Step 2, `extractGuideMaskFromImage` also returns `segments`: the skeleton split at junctions, merged at nearly-straight crossings, spur-filtered, oriented (vertical→top-first, horizontal→left-first) and sorted top-left-first. Each segment is a quadratic-bezier-smoothed polyline (`{ points, d }`).
+`extractGuideFromSvg(dottedSvg, width, height)` is a thin wrapper around `extractGuideMaskFromImage` with `mode: 'any-opaque'`:
 
-`ManualPathDrawer` renders those segments as a dashed overlay inside the drawing canvas using the same `stroke-width` / `stroke-dasharray` / `stroke-linecap:round` style the exported file uses — "what you see here is what you get". The visual stroke width and dash/gap lengths come from the Step-2 config inputs, so the user can tune the dotted look live and the preview stays in sync with the final export.
+1. Rasterize the SVG on a **transparent** canvas at 2× resolution (object-fit: contain).
+2. Binarize: any pixel with `alpha >= 64` counts as guide (colour doesn't matter — `dotted.svg` typically has a single dark fill for all dashes).
+3. Connected components, drop tiny specks (`minArea=20`, `minComponentRatio=0.05`).
+4. **Aggressive morphological close** (`closePasses=4` — 4 dilate passes then 4 erode passes). Each dash becomes a blob, and closing merges adjacent blobs across the gaps between dashes so the rasterized dotted line becomes a **continuous filled curve** before thinning.
+5. Zhang-Suen thinning → 1-pixel skeleton.
+6. Prune spurs, extend endpoints (thinning shaves 1-2 px off each tip), build the centroid/edge graph, segment at junctions, merge near-collinear crossings, orient (top-first / left-first), sort top-left-first, smooth with 5 iterations, emit quadratic-bezier path `d` strings.
 
-The "Ver guía" toggle in the drawer overlays the detected guide (cyan edges, dark-teal dots, orange endpoints) — useful when the skeleton has gaps or spurs. The main thresholds to tune live in `guideExtractor.js`: `minWhite` (min R,G,B for a pixel to count as letter body), `minArea` and `minComponentRatio` (to filter specks) and `renderScale` (rasterization supersampling).
+If extraction returns fewer than 3 centroids or no edges → fallback to `buildMaskFromImage(dottedSvg, ...)` (raster distance transform). If that also fails → `maskMode = 'none'`, stroke saved raw.
 
-### `letter-dotted.svg` contract
+The "Ver guía" toggle in the drawer overlays the detected guide (cyan edges, dark-teal dots, orange endpoints) — useful when the skeleton has gaps or spurs in a new `dotted.svg` design. Thresholds to tune live in `guideExtractor.js`: `minAlpha`, `minArea`, `minComponentRatio`, `closePasses`, `renderScale`.
 
-The downstream player expects **dashed paths**, one `<path id="path{i+1}">` per stroke, inside a `<g id="path">` wrapper:
+The drawer does **not** render a separate dashed overlay on top of the canvas — the uploaded `dotted.svg` itself is the visible guide, so "what the user sees while drawing" is exactly what they uploaded.
+
+### `base.svg` contract
+
+The downstream reader `fetch`es this file and injects it via `innerHTML` into a `<div>` to animate `#path1`, `#path2`, ... with `stroke-dashoffset`. Uses `<circle id="circle">` as the draggable marker and `<rect id="letterBg">` as the clickable background.
 
 ```xml
-<g><g><g id="path">
-  <path id="path1" d="M... L..." style="fill:none;stroke:#ccc;stroke-width:5px;stroke-linecap:round;stroke-dasharray:7,11;"/>
-  <path id="path2" .../>
-</g></g></g>
+<svg class="svg-letter" width="100%" height="100%" viewBox="0 0 380 340">
+  <rect id="letterBg" x="0" y="0" width="380" height="340"/>
+  <path id="path1" class="svgPath" stroke-width="16" fill="none" d="M..."/>
+  <path id="path2" class="svgPath" stroke-width="16" fill="none" d="M..."/>
+  <circle id="circle" cx="190" cy="85" r="12"/>
+</svg>
 ```
 
-- The `d` values come from `skeletonPaths` — the quadratic-bezier-smoothed skeleton segments extracted from the PNG. `GeneratorPage.alignSkeletonToStrokes` reorders them so the i-th emitted `<path>` is the skeleton segment closest (end-to-end distance, tried in both orientations) to the i-th stroke the user drew. This keeps `#pathN` selectors from `data.json.letterAnimationPath` in sync with the user's drawing sequence.
-  - If the user drew more strokes than the skeleton has segments, the extras fall back to the user's own drawn path (so no animation entry is left without a dotted target).
-  - If the skeleton couldn't be extracted, `letter-dotted.svg` falls back to the user's `strokePaths` directly — same shape as before.
-- `letterAnimationPath[i].selector` (`#path1`, `#path2`, …) targets the individual `<path>` elements inside the wrapper.
-- **The dashing must render as actual dashes, not round dots.** The reference bundle (`ejemplo/trazado-letra-a/letter-dotted.svg`) uses capsule-shaped dashes of ~12×5 px with period 18. We reproduce that with `stroke-width: 5` + `stroke-dasharray: 7,11` + `stroke-linecap: round` — the round caps extend the 7-unit dash into a visible 12-unit capsule and shrink the 11-unit gap into a 6-unit visible gap (period 18, matching the reference).
-- Do **not** set the dash length to `0.1` — that renders as round dots, which is the wrong visual. Any dash ≥ ~5 with round caps produces proper dashes.
-- `animationPathStroke` from `data.json` is **not** reused for this stroke-width. That value drives the animated trail on the consumer side; the dashed guide has its own fixed thickness.
+Contract:
 
-`generateDottedSvg`'s signature is `(paths, width, height, strokeWidth = 5, dashArray = '7,11')`. `GeneratorPage` passes the aligned skeleton paths + the Step-2 config values.
+- **No XML prolog, no DOCTYPE.** The reader injects via `innerHTML` inside a `<div>` — a prolog or external DOCTYPE inside a `<div>` is invalid HTML: the parser converts it into a bogus comment and subsequent CSS rules (`.svg-letter .svgPath`) fail to apply, leaving paths filled black (the "todo negro" bug).
+- `<path id="path{i+1}" class="svgPath" stroke-width="S" fill="none" d="..."/>` per user stroke. `d` is `strokePaths[i].d` from `ManualPathDrawer.handleFinalize` (`M x,y L x,y ...` over `smooth(pts, 2)`).
+- `stroke-width="S"` baked in from `effStroke` (= `animationPathStroke` in `data.json`).
+- `fill="none"` inline as presentation-attribute fallback. The reader's CSS overrides; the inline is only a safety net.
+- `<circle id="circle" cx cy r>` at the first point of the first stroke, `r = Math.ceil(stroke / 1.4)`.
+- Static attribute names (`class`, `stroke-width`), not JSX.
 
 ### Export
 
-`exportUtils.js` builds ZIPs with JSZip and triggers downloads via `file-saver`. **Now async** — it generates `thum.png` on the fly via `thumGenerator.generateThumPngBlob` (rasterizes fill + dots onto a canvas and calls `canvas.toBlob`).
+`exportUtils.js` builds ZIPs with JSZip and triggers downloads via `file-saver`.
 
-Each exported ZIP contains **only** these files:
+Each exported ZIP contains **only** two files per letter:
+
 - `data.json`
-- `letter-fill.svg`
-- `letter-outline.svg`
-- `letter-dotted.svg`
 - `base.svg`
-- `thum.png`
 
-Historical placeholders (silent MP3, 1×1 transparent PNG) and the `character.png`/`fondo.png`/`audio/es/title.mp3`/`audio/val/title.mp3` files are **no longer emitted**. `generateDataJson` still writes `character: "character.png"` and `title.audio.{es,val}: "audio/{es,val}/title"` fields, but the referenced files are not in the ZIP — this is an open contract issue tracked in `PENDING-TASKS.md`.
+`letter-fill.svg`, `letter-outline.svg`, `letter-dotted.svg`, `thum.png`, `character.png`, `fondo.png` and the audio files are **no longer emitted** by this tool — the content pipeline ships them alongside our output. The `data.json` shape, however, still matches `ejemplo/trazado-letra-a/data.json` exactly, including the `character` / `letterFill` / `letterOutline` / `letterDotted` / `title.audio.{es,val}` pointers. Dropping those fields breaks the reader even if the files they point to aren't produced here; they're pointers the reader resolves against the deployed bundle.
 
-### Dynamic per-letter values (what's left of it)
+### Dev-server reader preview
 
-Canvas size is **no longer** auto-computed — it's whatever the user configures in Step 3 (default 380 × 340). Only `dotSize` and `animationPathStroke` have auto-compute:
+`writeTrazadoToReader` POSTs to `/__write-reader-trazado` (middleware registered in `vite.config.js`) with `{ type, folderName, files: { 'data.json', 'base.svg' } }`. The middleware writes to `public/reader/libro/assets/trazados/{type}/{folderName}/`. Only works in `npm run dev`.
+
+### Dynamic per-letter values
+
+Canvas size is **not** auto-computed — it's whatever the user configures in Step 2 (default 380 × 340). Only `dotSize` and `animationPathStroke` have auto-compute:
 
 - `computeLetterParams(letter, type, canvasW)` returns `{ dotSize, animationPathStroke }` based on canvas width buckets + letter-specific overrides for `e`, `i`, `k`, `m`, `n`, `u`, `p` (ligada) and `canvasW > 240/350` thresholds (mayusculas). Values come from the original `lecto_pruebas_2026` project's tuning.
 
 **Override convention** (important for `GeneratorPage` inputs): `0 = auto-compute, >0 = user forces this value`. Canvas w/h don't have this convention — any user value is used directly.
 
-### SVG ID contract (consumed by the downstream player)
+### SVG ID contract
 
-These are not stylistic — the player selects on these ids.
+The reader selects on these ids — they're not stylistic:
 
-- `letter-fill.svg` — `<path id="fill">` (reference-font path) OR `<path id="fill1">`, `fill2`, ... (stroke-based fallback)
-- `letter-outline.svg` — `<path id="contorno">` OR `<path id="contorno1">`, ... In the stroke-based fallback the file contains **two stacked layers** over the same `d` strings: black strokes at `fillStrokeWidth` (carrying the `contornoN` ids) + white strokes at `fillStrokeWidth − 2·borderWidth` (no id) so the letter renders as a hollow outline with a white interior (matches `ejemplo/trazado-letra-a/letter-outline.svg` in spirit — visible border, see-through body). All black paths are emitted before all white paths so overlapping strokes don't leave an internal seam.
-- `letter-dotted.svg` — `<g id="path1">`, `<g id="path2">`, ... (one per stroke, indices must line up with `letterAnimationPath[i].selector`)
-- `base.svg` — template SVG mirroring the `LetterX` React components in `ejemplo/letters.js`: `<svg class="svg-letter" viewBox="0 0 W H">` containing `<rect id="letterBg">`, one `<path id="pathN" class="svgPath" stroke-width="S" d="...">` per user stroke, and `<circle id="circle" cx cy r>` at the first point of the first stroke. `stroke-width` is baked in from `animationPathStroke` in `data.json`; the circle radius follows the JSX formula `Math.ceil(stroke/1.4)`. No fill/stroke colors are set — the reader's CSS (`.svgPath`, `#letterBg`, `#circle`) paints them.
+- `base.svg` → `<rect id="letterBg">`, `<path id="pathN" class="svgPath">` per stroke, `<circle id="circle">`.
+- `data.json.letterAnimationPath[i].selector` → `#path1`, `#path2`, ... must line up 1:1 with the `<path id="pathN">` ids in `base.svg` and the `dotList[i]` entries.
 
-All four SVGs share `viewBox="0 0 {width} {height}"` matching `letterSize` in `data.json`.
+Stroke index `i` in `dotList` → animation entry `letterAnimationPath[i]` → base.svg path `#path{i+1}`. The generator sets all three from the user's stroke drawing order, so they stay in sync as long as nothing reorders the `strokePaths` array.
 
 ### State persistence across navigation
 
-The wizard's full state is mirrored into `window.__generatorState` (not Context, not Redux) via an always-running `useEffect` inside `GeneratorPage.jsx`, and the current step is kept in the URL as `?step=N`. Preview data is passed to `/preview` through `window.__trazadoPreview`. When editing `GeneratorPage`, preserve both mechanisms — leaving and returning to `/generator` must restore exactly where the user was.
+The wizard's full state is mirrored into `window.__generatorState` (not Context, not Redux) via an always-running `useEffect` inside `GeneratorPage.jsx`, and the current step is kept in the URL as `?step=N`. The `images` state in particular has shape `{ [letter]: { bg: dataURL, dotted: dataURL } }` — preserve that shape when touching Step 1 or persistence. Preview data is passed to `/preview` through `window.__trazadoPreview` and includes `bgSvg` + `dottedSvg` so the preview reproduces the same visual backdrop the user drew on.
 
 ### Compound letters (`ch`, `ll`) and ñ
 
@@ -144,17 +157,23 @@ The wizard's full state is mirrored into `window.__generatorState` (not Context,
 
 ### Letter selection
 
-In Step 2 the user can only pick **one letter at a time** (`toggleLetter` clears the array rather than appending). Treat `selectedLetters` as `string[]` of length 0 or 1. Bulk generation still works at the loop level in `handleGenerate`, so single-letter restriction is just a UI choice — the underlying generation code has no such limit.
+In Step 1 the user can only pick **one letter at a time** (`toggleLetter` clears the array rather than appending). Treat `selectedLetters` as `string[]` of length 0 or 1. Bulk generation still works at the loop level in `handleGenerate`, so single-letter restriction is just a UI choice — the underlying generation code has no such limit.
 
 ## Conventions worth knowing
 
 - ES modules (`"type": "module"`). JSX uses the automatic runtime via `@vitejs/plugin-react`.
 - No TypeScript; JSDoc on hot spots. Don't introduce TS without discussing.
 - `docs/` (README, DATA-FORMATS, UTILITIES, COMPONENTS, PENDING-TASKS) is the source of truth for output schemas and behavior. Update those docs when changing data shapes or the drawing pipeline.
-- `ejemplo/trazado-letra-a/trazado_a.png` is the **canonical reference input**: this is the exact shape the user is expected to upload (white letter body + arrows + order number on a coloured background). The rest of that folder (`character.png`, `fondo.png`, audio files, dashed `letter-dotted.svg`) is a **historical** output bundle from an earlier generator version and does **not** match current export. Use it only to understand what the downstream player may have expected before.
+- `ejemplo/trazado-letra-a/bg.svg` and `ejemplo/trazado-letra-a/dotted.svg` are the **canonical reference inputs**: exactly what the user is expected to upload in Step 1. The rest of that folder (`character.png`, `fondo.png`, audio files, `letter-fill.svg`, `letter-outline.svg`, `letter-dotted.svg`, `thum.png`) is a **historical** output bundle from an earlier generator version and does **not** match current export — it's kept only for reference.
 
 ## Known dead code
 
-- **`src/utils/pathSampler.js`** is no longer imported anywhere. Kept as reference (Zhang-Suen thinning, junction detection, colinear merge, resample, Bezier path construction).
-- **`src/utils/fontParser.js`** is no longer imported anywhere either — the old reference-font flow is gone entirely. Kept only as reference.
-- **`computeDotCount`** in `dataGenerator.js`: exported but no longer called by the UI (the manual drawer uses a fixed user-configured `dotCount` for all strokes).
+After the two-SVG-upload refactor, the following modules/functions have no active callers. They still compile and are tree-shaken out of the production bundle, but can be removed cleanly if you're doing cleanup:
+
+- **`src/utils/thumGenerator.js`** — generated `thum.png` by rasterizing fill+dotted. No `thum.png` in the export now.
+- **`src/utils/svgGenerator.js`** except `generateBaseSvg` — `generateFillSvg`, `generateFillSvgFromStrokes`, `generateOutlineSvg`, `generateOutlineSvgFromStrokes`, `generateDottedSvg` were for the removed `letter-fill/outline/dotted.svg` emission.
+- **`src/utils/fontParser.js`** — opentype.js font flow. Gone before the two-SVG refactor.
+- **`src/utils/pathSampler.js`** — Zhang-Suen + resample + bezier paths. Replaced by `guideExtractor`'s centerline segmentation.
+- **`letterMask.buildLetterMask`** — accepts an SVG content string. No callers.
+- **`dataGenerator.computeDotCount`** — the UI uses a fixed user-configured `dotCount`.
+- **`extractGuideMaskFromImage` with `mode: 'white-body'`** — legacy PNG entry point. No callers (everything goes through `extractGuideFromSvg` now). Could collapse the two modes into one.

@@ -50,26 +50,41 @@ import { computeDistanceTransform } from './letterMask'
 export async function extractGuideMaskFromImage(imageSrc, width, height, opts = {}) {
   if (!imageSrc || !width || !height) return null
 
+  // Two binarization modes:
+  //   'white-body' (default): PNG reference image with the letter body in
+  //       near-white pixels on a coloured background. The canvas is pre-filled
+  //       black so transparent image edges don't count as "white".
+  //   'any-opaque':           SVG guide (e.g. dotted.svg) rendered on a
+  //       transparent canvas — any visible (non-transparent) pixel counts as
+  //       guide. Used when the uploaded asset is itself the dashed tracing
+  //       guide, so we don't care about colour, only about where the guide
+  //       draws something. Dash gaps are closed by the morphological step.
+  const mode               = opts.mode               ?? 'white-body'
   const minWhite           = opts.minWhite           ?? 235
-  const minArea            = opts.minArea            ?? 80
-  const minComponentRatio  = opts.minComponentRatio  ?? 0.25
-  const closePasses        = Math.max(0, opts.closePasses ?? 1)
+  const minAlpha           = opts.minAlpha           ?? (mode === 'any-opaque' ? 64 : 128)
+  const minArea            = opts.minArea            ?? (mode === 'any-opaque' ? 20 : 80)
+  const minComponentRatio  = opts.minComponentRatio  ?? (mode === 'any-opaque' ? 0.05 : 0.25)
+  const closePasses        = Math.max(0, opts.closePasses ?? (mode === 'any-opaque' ? 4 : 1))
   const maxSpurLength      = Math.max(0, opts.maxSpurLength ?? 6)
-  const maxHoleFraction    = Math.max(0, opts.maxHoleFraction ?? 0.08)
+  const maxHoleFraction    = Math.max(0, opts.maxHoleFraction ?? (mode === 'any-opaque' ? 0 : 0.08))
   const renderScale        = Math.max(1, Math.floor(opts.renderScale ?? 2))
 
   const img = await loadImage(imageSrc)
   const rw = width * renderScale
   const rh = height * renderScale
 
-  // Rasterize with object-fit: contain, filling the padding with solid black
-  // so transparent image edges don't accidentally count as "white".
+  // Rasterize with object-fit: contain. In 'white-body' mode the padding is
+  // filled solid black so transparent image edges don't accidentally count as
+  // "white". In 'any-opaque' mode we keep the canvas transparent so only the
+  // SVG's own painted pixels pass the alpha threshold.
   const canvas = document.createElement('canvas')
   canvas.width = rw
   canvas.height = rh
   const ctx = canvas.getContext('2d')
-  ctx.fillStyle = '#000'
-  ctx.fillRect(0, 0, rw, rh)
+  if (mode !== 'any-opaque') {
+    ctx.fillStyle = '#000'
+    ctx.fillRect(0, 0, rw, rh)
+  }
 
   const iw = img.naturalWidth || img.width || rw
   const ih = img.naturalHeight || img.height || rh
@@ -90,15 +105,19 @@ export async function extractGuideMaskFromImage(imageSrc, width, height, opts = 
   ctx.drawImage(img, dx, dy, dw, dh)
   const { data } = ctx.getImageData(0, 0, rw, rh)
 
-  // Binary "letter body" mask: near-white + opaque.
+  // Binary "guide body" mask. In 'any-opaque' the only predicate is alpha; in
+  // 'white-body' we also require near-white RGB so the letter body is picked
+  // out from the coloured background / dark arrows / number labels.
   const bin = new Uint8Array(rw * rh)
   for (let i = 0; i < rw * rh; i++) {
     const r = data[i * 4]
     const g = data[i * 4 + 1]
     const b = data[i * 4 + 2]
     const a = data[i * 4 + 3]
-    if (a < 128) continue
-    if (r < minWhite || g < minWhite || b < minWhite) continue
+    if (a < minAlpha) continue
+    if (mode !== 'any-opaque') {
+      if (r < minWhite || g < minWhite || b < minWhite) continue
+    }
     bin[i] = 1
   }
 
@@ -264,6 +283,28 @@ export async function extractGuideMaskFromImage(imageSrc, width, height, opts = 
       segmentEndpoints,
     },
   }
+}
+
+/**
+ * Extract the tracing guide directly from a user-uploaded `dotted.svg` —
+ * a dashed tracing overlay where every painted pixel belongs to the guide.
+ *
+ * Rasterizes the SVG on a transparent canvas, treats any opaque pixel as
+ * guide-body, and runs the same connected-components → morphological close
+ * → Zhang-Suen skeletonization → centerline-segment pipeline as the PNG
+ * flow. The aggressive closing (default 4 passes) merges the dashes into
+ * continuous lines before thinning, so the resulting polyline is a single
+ * clean centerline per stroke even when the source is visually dashed.
+ *
+ * Thin wrapper over `extractGuideMaskFromImage` with `mode: 'any-opaque'`.
+ *
+ * @param {string} svgSrc  data URL / object URL of the uploaded dotted.svg
+ * @param {number} width   canvas/letter-space width
+ * @param {number} height  canvas/letter-space height
+ * @param {Object} [opts]  overrides forwarded to extractGuideMaskFromImage
+ */
+export async function extractGuideFromSvg(svgSrc, width, height, opts = {}) {
+  return extractGuideMaskFromImage(svgSrc, width, height, { ...opts, mode: 'any-opaque' })
 }
 
 // =============================================================================

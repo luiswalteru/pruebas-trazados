@@ -2,11 +2,18 @@
 
 ## Descripcion General
 
-Aplicacion standalone Vite + React para generar ejercicios interactivos de trazado de letras ("trazados") para una app educativa infantil. Por cada letra se generan `data.json`, los tres SVGs (`letter-fill`, `letter-outline`, `letter-dotted`) y un `thum.png` auto-generado, en dos variantes: **ligada** (cursiva minusculas) y **mayusculas**.
+Aplicacion standalone Vite + React para generar ejercicios interactivos de trazado de letras ("trazados") para una app educativa infantil. Por cada letra se genera un bundle minimo con **`data.json` + `base.svg`**, en dos variantes: **ligada** (cursiva minusculas) y **mayusculas**.
 
-> **Estado actual (abril 2026)**: dibujo manual sobre una imagen/SVG de referencia. El usuario sube un SVG ilustrado (letra + linea punteada guia + personaje) y dibuja el recorrido con el cursor. Al soltar, el trazo se proyecta automaticamente sobre la polilinea de puntos guia extraida del SVG. PNG/JPG tambien se aceptan como fallback (usan el centrado clasico por distance transform).
+> **Estado actual (abril 2026)**: flujo de dos-SVG-subidos. En el Paso 1 el usuario sube dos SVG por letra:
 >
-> Los archivos `src/utils/pathSampler.js` y `src/utils/fontParser.js` no se importan en ningun lado — son legacy. El export nunca incluye `character.png`, `fondo.png` ni audios; `thum.png` se genera automaticamente al rasterizar fill + dotted.
+> - **`bg.svg`** — la ilustracion de fondo (letra coloreada + flechas + numero de orden + personajes decorativos).
+> - **`dotted.svg`** — el punteado que indica por donde debe pasar el trazo.
+>
+> En el Paso 2 ambos se apilan (bg debajo, dotted encima) como guia visual y el usuario dibuja encima con el cursor. El ajuste al soltar el trazo se hace contra el **esqueleto extraido automaticamente de `dotted.svg`**: el extractor rasteriza el SVG, detecta los pixeles opacos, cierra los gaps entre dashes y skeletoniza.
+>
+> El bundle exportado **solo contiene `data.json` + `base.svg`**. `bg.svg` y `dotted.svg` se autoran aparte y los despliega el pipeline de contenido — no se re-emiten desde este generador. `letter-fill.svg`, `letter-outline.svg`, `letter-dotted.svg`, `thum.png`, `character.png` y los audios **ya no se producen**.
+>
+> Los archivos `src/utils/pathSampler.js`, `src/utils/fontParser.js`, `src/utils/thumGenerator.js` y gran parte de `src/utils/svgGenerator.js` (todo menos `generateBaseSvg`) son **codigo muerto**: no se importan en ningun lado y se mantienen solo por referencia historica.
 
 ## Instalacion y Ejecucion
 
@@ -31,7 +38,7 @@ No hay tests, linter ni typecheck configurados. La "correctitud" se valida compi
 - **JSZip 3.10.1** - Generacion de archivos ZIP
 - **file-saver 2.0.5** - Descarga de archivos desde el navegador
 
-`opentype.js` sigue como dependencia de `package.json` pero ya no se importa — el flujo actual no usa fuentes tipograficas.
+`opentype.js` sigue como dependencia de `package.json` pero ya no se importa.
 
 ## Estructura del Proyecto
 
@@ -42,29 +49,41 @@ trazados-generator/
   vite.config.js
   docs/                             # Documentacion del proyecto
     README.md                       # Este archivo
-    DATA-FORMATS.md                 # Schemas de data.json y SVGs
+    DATA-FORMATS.md                 # Schema de data.json y base.svg
     UTILITIES.md                    # Documentacion de utilidades
     COMPONENTS.md                   # Documentacion de componentes
     PENDING-TASKS.md                # Tareas pendientes y problemas
   ejemplo/
-    trazado-letra-a/                # Bundle de referencia (formato antiguo con audio/imagenes)
+    trazado-letra-a/                # Carpeta de referencia. Contiene los
+                                    # inputs canonicos (bg.svg + dotted.svg)
+                                    # y tambien el bundle historico antiguo
+                                    # con assets (audio/, character.png, ...)
+                                    # que **ya no** refleja lo que exporta
+                                    # esta herramienta.
   src/
     main.jsx                        # Entry point con BrowserRouter
     App.jsx                         # Layout principal con navegacion
     App.css                         # Estilos globales de toda la app
     pages/
       HomePage.jsx                  # Landing minimalista con un solo CTA
-      GeneratorPage.jsx             # Wizard principal de 4 pasos
+      GeneratorPage.jsx             # Wizard principal de 3 pasos
       PreviewPage.jsx               # Preview interactivo del trazado
     components/
-      ManualPathDrawer.jsx          # Canvas de dibujo manual + proyeccion del trazo al soltar
+      ManualPathDrawer.jsx          # Canvas de dibujo manual + proyeccion
+                                    # del trazo al soltar sobre el esqueleto
+                                    # de dotted.svg
     utils/
-      guideExtractor.js             # Rasterizado del SVG -> segmentacion -> polilinea + proyeccion
-      letterMask.js                 # Distance transform + centerStrokePoints (fallback PNG/JPG)
-      svgGenerator.js               # Generacion de SVGs (fill, outline, dotted + fallbacks de strokes)
-      thumGenerator.js              # Rasteriza fill + dotted a thum.png
-      dataGenerator.js              # Generacion de data.json + nombres de carpeta + computeLetterParams
-      exportUtils.js                # Exportacion ZIP con JSZip
+      guideExtractor.js             # Rasterizado -> segmentacion -> polilinea
+                                    # + proyeccion. Soporta dos modos:
+                                    # 'white-body' (legado PNG) y 'any-opaque'
+                                    # (SVG uploads, el unico activo hoy).
+      letterMask.js                 # Distance transform + fallback raster
+      svgGenerator.js               # generateBaseSvg (unico en uso). El resto
+                                    # del archivo es codigo muerto.
+      dataGenerator.js              # Generacion de data.json + nombres de
+                                    # carpeta + computeLetterParams
+      exportUtils.js                # ZIP con JSZip (solo data.json + base.svg)
+      thumGenerator.js              # LEGACY — no se importa
       fontParser.js                 # LEGACY — no se importa
       pathSampler.js                # LEGACY — no se importa
 ```
@@ -73,15 +92,15 @@ trazados-generator/
 
 ### GeneratorPage - Wizard de 3 Pasos
 
-**Paso 1: Tipo, letra e imagen** - Elegir entre "ligada" o "mayusculas", seleccionar **una sola letra** del grid (seleccion exclusiva — click en otra la reemplaza), y subir la imagen de referencia para esa letra. Se aceptan `.svg`, `.png`, `.jpg`. El uso recomendado es un SVG ilustrado con la letra + la linea punteada guia + el personaje; el extractor identifica automaticamente los puntos guia. El abecedario tiene 27 letras (a-z + ñ) + ch + ll.
+**Paso 1: Tipo, letra e imagenes** - Elegir entre "ligada" o "mayusculas", seleccionar **una sola letra** del grid (seleccion exclusiva — click en otra la reemplaza), y subir los dos SVG de referencia para esa letra: `bg.svg` (base) y `dotted.svg` (guia). Ambos son obligatorios para avanzar. El panel muestra una vista previa apilada de los dos archivos para confirmar que se alinean correctamente. El abecedario tiene 27 letras (a-z + ñ) + ch + ll.
 
-**Paso 2: Dibujar trazado** - Config (canvas w/h, dotCount, dotSize, strokeWidth, parametros del dotted-svg) + `ManualPathDrawer` con la imagen de referencia de fondo. El usuario dibuja libre; al soltar el boton del mouse el trazo se proyecta sobre la polilinea extraida del SVG (o sobre el eje medial si el input era raster). Tick ✓ junto al titulo cuando hay trazado guardado. Boton "Generar y continuar" -> paso 3.
+**Paso 2: Dibujar trazado** - Config (canvas w/h, dotCount, dotSize, strokeWidth) + `ManualPathDrawer` con `bg.svg` + `dotted.svg` apilados como guia visible. El usuario dibuja libre con el cursor; al soltar el mouse, el trazo se proyecta sobre la polilinea extraida del esqueleto de `dotted.svg`. Tick ✓ junto al titulo cuando hay trazado guardado. Boton "Generar y continuar" → paso 3.
 
-**Paso 3: Exportar** - Lista de trazados generados con valores computados (canvas, dotSize, stroke, cantidad de trazos, puntos por trazo). Botones: `Preview` (navega a `/preview`), `Exportar` (ZIP individual), `Exportar todos como ZIP` (ZIP masivo). `thum.png` se genera al exportar; no hay uploads de assets ni `character.png`/`fondo.png`/audios.
+**Paso 3: Exportar** - Lista de trazados generados con valores computados (canvas, dotSize, stroke, cantidad de trazos, puntos por trazo). Botones: `Preview` (navega a `/preview`), `Preview en reader` (escribe al reader local via dev-server middleware), `Exportar` (ZIP individual), `Exportar todos como ZIP` (ZIP masivo). El ZIP solo contiene `data.json` + `base.svg` por letra.
 
 ### Valores Dinamicos
 
-Solo `dotSize` y `animationPathStroke` se calculan dinamicamente (via `computeLetterParams(letter, type, canvasW)`). Canvas size ya no se auto-computa — es siempre lo que el usuario configura en el paso 3.
+Solo `dotSize` y `animationPathStroke` se calculan dinamicamente (via `computeLetterParams(letter, type, canvasW)`). Canvas size siempre es lo que el usuario configura en el Paso 2.
 
 | Parametro | Ligada | Mayusculas | Como se calcula |
 |-----------|--------|------------|-----------------|
@@ -92,16 +111,16 @@ Solo `dotSize` y `animationPathStroke` se calculan dinamicamente (via `computeLe
 
 ### Persistencia de Estado
 
-El estado del generador (incluyendo la imagen cargada por letra en `images`) se persiste en `window.__generatorState` en un `useEffect` sin dependencias (se ejecuta cada render) para sobrevivir a la navegacion a Preview y de vuelta. El paso actual se lee/escribe en el URL param `?step=N`. El preview recibe datos via `window.__trazadoPreview`.
+El estado del generador (incluyendo los dos SVG cargados por letra en `images: { [letter]: { bg, dotted } }`) se persiste en `window.__generatorState` en un `useEffect` sin array de dependencias (se ejecuta cada render) para sobrevivir a la navegacion a Preview y de vuelta. El paso actual se lee/escribe en el URL param `?step=N`. El preview recibe datos via `window.__trazadoPreview`, incluyendo los SVG subidos (`bgSvg`, `dottedSvg`) para reproducir fielmente el fondo visible.
 
 ### PreviewPage - Preview Interactivo
 
 Simula el trazado real como lo haria el componente React de la app educativa:
-- Muestra el outline SVG como guia tenue de fondo, el dotted como puntos
+- Apila `bg.svg` + `dotted.svg` de fondo (igual que en el drawer)
 - El usuario hace click para iniciar, luego mueve el cursor por los puntos
 - Hit radius generoso: `max(dotSize, 28)` px
 - Multi-stroke: al completar un trazo avanza al siguiente
-- Al completar todo: muestra el fill SVG con animacion fade-in
+- Al completar todo: oculta el overlay de dots/strokes (ya no hay fill SVG generado que mostrar)
 - Modo debug (activo por defecto): visualiza todos los dots con indices, el hit radius, distancia al target, y el JSON del dotList
 
 ## Estructura de Salida por Letra
@@ -110,15 +129,11 @@ Cada letra genera una carpeta con esta estructura (lo que empaqueta el ZIP):
 
 ```
 trazado-letra-{nombre}/
-  data.json               # Datos del trazado (dotList, metadata)
-  letter-fill.svg         # SVG con la letra rellena (path id="fill")
-  letter-outline.svg      # SVG con el contorno (path id="contorno")
-  letter-dotted.svg       # SVG con un <path id="pathN"> dasheado por trazo, dentro de <g id="path">
-                          # (stroke-dasharray:0.1,16 + stroke-linecap:round genera el efecto punteado)
-  thum.png                # Rasterizacion auto-generada de fill + dots
+  data.json               # Datos del trazado (dotList, metadata, letterSize)
+  base.svg                # Template animable del reader (paths + circle)
 ```
 
-> **Nota**: El `data.json` aun declara campos `character: "character.png"` y `title.audio.{es,val}: "audio/{es,val}/title"`, pero esos archivos **ya no se incluyen en el ZIP**. Si el componente consumidor los requiere, habra que proveerlos aparte o dejar de emitir esos campos.
+Nada mas. `bg.svg` y `dotted.svg` los autora el pipeline de contenido y llegan al reader por otra via — esta herramienta solo genera lo que depende de los trazos dibujados.
 
 ### Nombrado de Carpetas
 
@@ -128,21 +143,24 @@ trazado-letra-{nombre}/
 ### Exportacion Masiva
 
 Al exportar todos, se agrupan bajo una carpeta con el tipo:
+
 ```
 trazados-ligada.zip
   ligada/
     trazado-letra-a/
+      data.json
+      base.svg
     trazado-letra-b/
-    ...
-```
-o
-```
-trazados-mayusculas.zip
-  mayusculas/
-    trazado-letra-a-mayus/
+      data.json
+      base.svg
     ...
 ```
 
 ### Bundle de referencia
 
-`ejemplo/trazado-letra-a/` conserva el formato **antiguo** (con `character.png`, `fondo.png`, `audio/es/title.mp3`, `audio/val/title.mp3` y un `letter-dotted.svg` con `stroke-dasharray`). Es util como referencia del shape que el componente consumidor soportaba historicamente, pero **no** refleja lo que el generador produce hoy.
+`ejemplo/trazado-letra-a/` contiene los inputs canonicos del nuevo flujo:
+
+- **`bg.svg`** — shape de la ilustracion de fondo que se espera subir en el Paso 1 (slot "bg").
+- **`dotted.svg`** — shape del punteado guia que se espera subir en el Paso 1 (slot "dotted").
+
+Tambien contiene el bundle historico antiguo (`letter-fill.svg`, `letter-outline.svg`, `letter-dotted.svg`, `character.png`, `fondo.png`, audios, `thum.png`) de cuando la herramienta producia todos esos archivos. **Ese bundle ya no se genera** — utilizarlo solo como referencia de que esperaba el reader en iteraciones anteriores.

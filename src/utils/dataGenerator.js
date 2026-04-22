@@ -24,6 +24,13 @@ export function generateDataJson({
   const titleEs = `Trazado de la letra «${displayLetter}».`;
   const titleVal = `Trazado de la letra «${displayLetter}».`;
 
+  // Shape matches `ejemplo/trazado-letra-a/data.json` — the canonical reference
+  // the reader reads. This tool only emits `data.json` + `base.svg`; the
+  // `character` / `letterFill` / `letterOutline` / `letterDotted` pointers
+  // stay in the JSON because the reader still loads those files, which are
+  // authored by the content pipeline and shipped alongside this generator's
+  // output. Keep the field order identical to the reference so diffs are
+  // readable against the existing trazados catalogue.
   const data = {
     activityId: 'trazados',
     sectionId: 'trazados',

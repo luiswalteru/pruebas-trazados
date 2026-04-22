@@ -31,9 +31,9 @@ export default function PreviewPage() {
     for (const file of files) {
       const text = await file.text()
       if (file.name === 'data.json') data.dataJson = JSON.parse(text)
-      else if (file.name === 'letter-fill.svg') data.fillSvg = text
-      else if (file.name === 'letter-outline.svg') data.outlineSvg = text
-      else if (file.name === 'letter-dotted.svg') data.dottedSvg = text
+      else if (file.name === 'base.svg') data.baseSvg = text
+      else if (file.name === 'bg.svg') data.bgSvg = text
+      else if (file.name === 'dotted.svg') data.dottedSvg = text
     }
     if (data.dataJson) { setPreviewData(data); resetAll() }
   }, [])
@@ -146,14 +146,14 @@ export default function PreviewPage() {
             Cargar archivos de trazado
             <input type="file" multiple accept=".json,.svg" onChange={handleFileUpload} style={{ display: 'none' }} />
           </label>
-          <p className="info-text">Selecciona data.json, letter-fill.svg, letter-outline.svg y letter-dotted.svg</p>
+          <p className="info-text">Selecciona data.json, base.svg y opcionalmente bg.svg + dotted.svg</p>
         </div>
       </div>
     )
   }
 
   // ---- Render -------------------------------------------------------------
-  const { dataJson, fillSvg, outlineSvg, dottedSvg } = previewData
+  const { dataJson, bgSvg, dottedSvg } = previewData
   const dots = currentDotList?.coordinates ?? []
 
   return (
@@ -205,28 +205,32 @@ export default function PreviewPage() {
           position: 'relative',
         }}>
 
-          {/* Letter fill (shown on completion) */}
-          {showFill && fillSvg && (
-            <div className="preview-layer fill-layer fade-in"
-              style={{ position: 'absolute', inset: 0, zIndex: 1 }}
-              dangerouslySetInnerHTML={{ __html: fillSvg }}
-            />
+          {/* Background layer (bg.svg) — shown under everything */}
+          {bgSvg && (
+            bgSvg.startsWith('data:') || bgSvg.startsWith('http')
+              ? <img src={bgSvg} alt="" className="preview-layer"
+                  style={{ position: 'absolute', inset: 0, zIndex: 1,
+                           width: '100%', height: '100%', objectFit: 'contain',
+                           pointerEvents: 'none' }}
+                />
+              : <div className="preview-layer"
+                  style={{ position: 'absolute', inset: 0, zIndex: 1 }}
+                  dangerouslySetInnerHTML={{ __html: bgSvg }}
+                />
           )}
 
-          {/* Letter outline (faint background guide) */}
-          {!showFill && outlineSvg && (
-            <div className="preview-layer"
-              style={{ position: 'absolute', inset: 0, zIndex: 1, opacity: 0.15 }}
-              dangerouslySetInnerHTML={{ __html: outlineSvg }}
-            />
-          )}
-
-          {/* Letter dotted */}
-          {!showFill && dottedSvg && (
-            <div className="preview-layer"
-              style={{ position: 'absolute', inset: 0, zIndex: 2 }}
-              dangerouslySetInnerHTML={{ __html: dottedSvg }}
-            />
+          {/* Dotted guide (dotted.svg) — overlaid on bg */}
+          {dottedSvg && (
+            dottedSvg.startsWith('data:') || dottedSvg.startsWith('http')
+              ? <img src={dottedSvg} alt="" className="preview-layer"
+                  style={{ position: 'absolute', inset: 0, zIndex: 2,
+                           width: '100%', height: '100%', objectFit: 'contain',
+                           pointerEvents: 'none' }}
+                />
+              : <div className="preview-layer"
+                  style={{ position: 'absolute', inset: 0, zIndex: 2 }}
+                  dangerouslySetInnerHTML={{ __html: dottedSvg }}
+                />
           )}
 
           {/* SVG overlay for traced paths + dots */}
