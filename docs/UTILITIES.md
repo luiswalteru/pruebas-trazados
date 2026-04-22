@@ -57,9 +57,9 @@ Usada al proyectar el primer y ultimo punto de un trazo para que aterricen limpi
 #### `projectStrokeOnGuide(points, guide, opts = {})`
 Orquesta la proyeccion de un trazo completo:
 
-1. Primer punto: `snapToEndpoint` (radio `endpointRadius` = 50) o proyeccion libre.
+1. Primer punto: snap al extremo de `segments` mas cercano (radio `endpointRadius` = 20) o proyeccion libre. El snap usa `guide.segmentEndpoints` — los extremos de los segmentos visibles (guia punteada) — no la lista cruda de pixels degree-1 del esqueleto, que incluye roturas de ciclos y vecinos de junction que no son visibles y provocan teletransportes cross-letra (p.ej. el final del bucle de una "a" cursiva saltando a la punta de la cola).
 2. Cada punto siguiente: `snapToPolyline` con `rawHistory = points.slice(i-10, i+1)` (direccion desde la trayectoria cruda del usuario) y `history = out.slice(-5)` (referencia de continuidad desde lo ya proyectado).
-3. Ultimo punto: `snapToEndpoint` si hay uno cerca.
+3. Ultimo punto: snap al extremo de `segments` mas cercano (mismo radio) si lo hay.
 4. Dos pasadas de neighbour-averaging (`25/50/25`, extremos fijos) para limpiar micro-jitter entre proyecciones que caen en segmentos contiguos.
 
 Invocada por `ManualPathDrawer.endStroke` y por el boton "Centrar trazado".
@@ -107,8 +107,16 @@ Fill SVG fallback cuando no hay fuente. Dibuja cada stroke del usuario como un p
 Outline SVG a partir del path de la fuente de referencia.
 - Path con `id="contorno"` sin fill
 
-#### `generateOutlineSvgFromStrokes(strokePaths, width, height, borderWidth = 3)` (NUEVO)
-Outline fallback. Cada stroke como path fino.
+#### `generateOutlineSvgFromStrokes(strokePaths, width, height, strokeWidth = 40, borderWidth = 3)` (NUEVO)
+Outline fallback como **letra hueca**: misma silueta que `generateFillSvgFromStrokes` pintada como un borde negro de `borderWidth` alrededor de un interior blanco.
+
+Implementacion: dos capas apiladas de paths stroked sobre el mismo `d`:
+1. Cada stroke con `strokeWidth` en negro → silueta exterior (`id="contornoN"`).
+2. Cada stroke con `strokeWidth − 2·borderWidth` en blanco → relleno interior (sin id).
+
+El orden es **todos los negros primero, luego todos los blancos**: si el usuario dibujo strokes que se solapan (bucle + cola de una "a" cursiva), el blanco de un stroke tapa el borde negro del vecino y no queda costura interna.
+
+- `strokeWidth` debe coincidir con el que se pasa a `generateFillSvgFromStrokes` para que fill y outline compartan silueta (`GeneratorPage` pasa `fillStrokeWidth`).
 - Cada path con `id="contorno1"`, `id="contorno2"`, ...
 
 #### `generateDottedSvg(strokePaths, width, height, strokeWidth = 5, dashArray = '7,11')`
@@ -124,6 +132,17 @@ Emite un `<path id="path{i+1}">` dasheado por cada trazo, envueltos en un `<g id
 Si se pasa un `dashArray` muy corto en el primer componente (ej. `'0.1,16'`) el resultado seran puntos redondos en lugar de rayas — mantener el default salvo que se busque otro estilo.
 
 Los ids `path1`, `path2`, ... concuerdan con los selectores de `letterAnimationPath` en el `data.json`.
+
+#### `generateBaseSvg(strokePaths, width, height, stroke)` (NUEVO)
+Genera el `base.svg`: template que replica la estructura de los componentes `LetterX` en `ejemplo/letters.js`. El reader hace `fetch` del archivo y lo inyecta via `innerHTML` en un `<div>` para animar los `<path>` con `stroke-dashoffset`, usa `<circle id="circle">` como marcador inicial y `<rect id="letterBg">` como fondo clickable.
+
+- **Input**: `strokePaths: Array<{ d, points? }>`, `width`, `height`, `stroke` (numero concreto, normalmente `effStroke` de `GeneratorPage`).
+- **Output**: string SVG **sin XML prolog ni DOCTYPE** (si los emitiera, al inyectarse via `innerHTML` dentro de un `<div>` el parser HTML los convierte en comentario bogus y las reglas CSS del reader no aplican — la letra sale toda negra). Estructura: `<svg class="svg-letter">` conteniendo:
+  - `<rect id="letterBg" x="0" y="0" width="W" height="H"/>`
+  - Un `<path id="path{i+1}" class="svgPath" stroke-width="S" fill="none" d="..."/>` por trazo.
+  - `<circle id="circle" cx cy r/>` en el primer punto del primer trazo, con `r = Math.ceil(S / 1.4)`.
+
+Usa atributos estaticos (`class`, `stroke-width`), no JSX (`className`, `strokeWidth`). `fill="none"` inline es fallback de atributo de presentacion — el CSS del reader (`.svg-letter .svgPath { fill:none; stroke:#f04e23 }`) sobreescribe, pero si falla al cargar los paths no se rellenan en negro.
 
 ---
 

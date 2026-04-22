@@ -213,6 +213,23 @@ export async function extractGuideMaskFromImage(imageSrc, width, height, opts = 
   // emitted as letter-dotted.svg.
   const segments = extractCenterlineSegments(skelMask, rw, rh, renderScale)
 
+  // Visible endpoints: the first and last point of each *segment* (what the
+  // user sees as dashed guide), deduplicated by near-equality. These are the
+  // natural targets for the first/last-point snap in projectStrokeOnGuide —
+  // the raw skeleton endpoints list includes cycle-break pixels and junction
+  // neighbours that aren't visible to the user and cause stroke endpoints to
+  // teleport across the letter.
+  const segmentEndpoints = []
+  for (const seg of segments) {
+    if (!seg.points || seg.points.length < 2) continue
+    const a = seg.points[0]
+    const b = seg.points[seg.points.length - 1]
+    for (const p of [a, b]) {
+      const dup = segmentEndpoints.some(q => Math.hypot(q.x - p.x, q.y - p.y) < 2)
+      if (!dup) segmentEndpoints.push({ x: p.x, y: p.y })
+    }
+  }
+
   // Downsampled mask + distance transform (kept for the legacy centerline
   // pull in case a caller asks for it — projectStrokeOnGuide doesn't use it).
   const maskLow = new Uint8Array(width * height)
@@ -237,12 +254,14 @@ export async function extractGuideMaskFromImage(imageSrc, width, height, opts = 
     edges,
     endpoints,
     segments,
+    segmentEndpoints,
     debug: {
       dotCount: centroids.length,
       centroids,
       edges,
       endpoints,
       segments,
+      segmentEndpoints,
     },
   }
 }
@@ -636,6 +655,28 @@ export function snapToEndpoint(point, centroids, endpoints, opts = {}) {
 }
 
 /**
+ * Snap to the nearest point in a flat list of `{x,y}` candidates. Used for
+ * the segment-endpoint snap — the candidates are the visible extremes of the
+ * dashed guide the user sees, so a stroke never teleports to a topologically
+ * close but visually unrelated endpoint (e.g. the tail tip of a cursive "a"
+ * when closing the bowl near the junction).
+ */
+function snapToNearestPoint(point, pts, maxDist) {
+  if (!pts || pts.length === 0) return null
+  const maxD2 = maxDist * maxDist
+  let best = null
+  let bestD2 = Infinity
+  for (const p of pts) {
+    const dx = p.x - point.x
+    const dy = p.y - point.y
+    const d2 = dx * dx + dy * dy
+    if (d2 < bestD2) { bestD2 = d2; best = p }
+  }
+  if (!best || bestD2 > maxD2) return null
+  return { x: best.x, y: best.y }
+}
+
+/**
  * Project an entire stroke (array of raw points) onto the guide polyline.
  * The first point tries to snap to a polyline endpoint; the rest are
  * projected with a direction-aware bias built from the already-projected
@@ -649,19 +690,26 @@ export function snapToEndpoint(point, centroids, endpoints, opts = {}) {
 export function projectStrokeOnGuide(points, guide, opts = {}) {
   if (!guide || !guide.edges || guide.edges.length === 0) return points
   if (!points || points.length < 2) return points
-  const { centroids, edges, endpoints } = guide
-  const endpointRadius = opts.endpointRadius ?? 50
+  const { centroids, edges, segmentEndpoints } = guide
+  const endpointRadius = opts.endpointRadius ?? 20
   const maxDist        = opts.maxDist        ?? 120
+
+  // Prefer snapping to the *visible* segment extremes (what the user sees as
+  // dashed guide). Falls back to raw skeleton endpoints only when the caller
+  // didn't provide segmentEndpoints — the raw list includes cycle-break
+  // pixels and junction neighbours that aren't visible and cause stroke
+  // endpoints to teleport across the letter (e.g. the tail tip of a cursive
+  // "a" when closing the bowl near the junction).
+  const endpointPts = segmentEndpoints && segmentEndpoints.length > 0
+    ? segmentEndpoints
+    : (guide.endpoints || []).map(i => centroids[i]).filter(Boolean)
 
   const out = []
 
-  // First point: snap to the nearest polyline endpoint if one is close,
+  // First point: snap to the nearest visible endpoint if one is close,
   // otherwise free projection.
   const first = points[0]
-  let firstProj = null
-  if (endpoints && endpoints.length > 0) {
-    firstProj = snapToEndpoint(first, centroids, endpoints, { maxDist: endpointRadius })
-  }
+  let firstProj = snapToNearestPoint(first, endpointPts, endpointRadius)
   if (!firstProj) {
     firstProj = snapToPolyline(first, centroids, edges, { maxDist })
   }
@@ -677,11 +725,11 @@ export function projectStrokeOnGuide(points, guide, opts = {}) {
     out.push(proj)
   }
 
-  // Last point: also snap to endpoint if close, so strokes that end at a
-  // polyline extreme land cleanly on it.
-  if (endpoints && endpoints.length > 0 && out.length >= 2) {
+  // Last point: also snap to a visible endpoint if close, so strokes that
+  // end at a segment extreme land cleanly on it.
+  if (endpointPts.length > 0 && out.length >= 2) {
     const lastRaw = points[points.length - 1]
-    const lastEp = snapToEndpoint(lastRaw, centroids, endpoints, { maxDist: endpointRadius })
+    const lastEp = snapToNearestPoint(lastRaw, endpointPts, endpointRadius)
     if (lastEp) out[out.length - 1] = lastEp
   }
 

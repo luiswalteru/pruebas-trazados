@@ -4,6 +4,7 @@ import {
   generateDottedSvg,
   generateFillSvgFromStrokes,
   generateOutlineSvgFromStrokes,
+  generateBaseSvg,
 } from '../utils/svgGenerator'
 import { generateDataJson, getFolderName, SPANISH_LETTERS, SPECIAL_COMBOS, computeLetterParams } from '../utils/dataGenerator'
 import { downloadSingleTrazado, exportAllTrazados, writeTrazadoToReader } from '../utils/exportUtils'
@@ -174,7 +175,9 @@ export default function GeneratorPage() {
     // only — it never becomes part of the exported bundle.
     const fillStrokeWidth = Math.max(20, effDotSize * 1.2)
     const fillSvg = generateFillSvgFromStrokes(strokePaths, w, h, fillStrokeWidth)
-    const outlineSvg = generateOutlineSvgFromStrokes(strokePaths, w, h, 3)
+    // Outline uses the same body width as fill so its silhouette matches;
+    // the black rim thickness (3 px each side) is cosmetic.
+    const outlineSvg = generateOutlineSvgFromStrokes(strokePaths, w, h, fillStrokeWidth, 3)
 
     // letter-dotted.svg: dashed paths taken from the skeleton of the uploaded
     // PNG (the centerline of the letter's thickness), reordered to line up
@@ -195,6 +198,12 @@ export default function GeneratorPage() {
       time: Math.max(2, Math.round((dotList[i]?.coordinates?.length || 40) / 4))
     }))
 
+    // base.svg mirrors the letters.js React components: letterBg rect,
+    // one <path id="pathN" class="svgPath" stroke-width="effStroke"> per user
+    // stroke, circle at the first point. Stroke width is baked in from
+    // animationPathStroke so the file is self-contained.
+    const baseSvg = generateBaseSvg(strokePaths, w, h, effStroke)
+
     const folderName = getFolderName(letter, type)
     const dataJson = generateDataJson({
       letter,
@@ -212,6 +221,7 @@ export default function GeneratorPage() {
       fillSvg,
       outlineSvg,
       dottedSvg,
+      baseSvg,
       dataJson,
       dotList,
       strokePaths,

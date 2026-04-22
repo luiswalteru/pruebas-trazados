@@ -112,6 +112,7 @@ export default function ManualPathDrawer({
             centroids: guide.centroids,
             edges: guide.edges,
             endpoints: guide.endpoints,
+            segmentEndpoints: guide.segmentEndpoints,
           }
           setGuideDebug(guide.debug)
           setMaskMode('skeleton')

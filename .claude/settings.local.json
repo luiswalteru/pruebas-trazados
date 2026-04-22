@@ -4,7 +4,8 @@
       "Bash(grep -oE 'style=\"[^\"]{0,500}\"' /Users/luis/Desktop/Oneclick/Edelvives/Infantil2026/pruebas-trazados/ejemplo/trazado-letra-a/letter-dotted.svg)",
       "Bash(python3:*)",
       "Bash(npx vite:*)",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(awk NR<=40 *)"
     ]
   }
 }

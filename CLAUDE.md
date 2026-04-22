@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Standalone Vite + React tool for generating interactive letter-tracing ("trazados") exercises for an educational infantil app. For each letter of the Spanish alphabet (plus `ch`, `ll`, and `ñ` → `ny` for folder names) it produces the bundle consumed by the downstream React player: `data.json`, three SVGs (`letter-fill`, `letter-outline`, `letter-dotted`), and an auto-generated `thum.png`. Output ships in two variants: `ligada` (cursive lowercase) and `mayusculas` (uppercase).
+Standalone Vite + React tool for generating interactive letter-tracing ("trazados") exercises for an educational infantil app. For each letter of the Spanish alphabet (plus `ch`, `ll`, and `ñ` → `ny` for folder names) it produces the bundle consumed by the downstream React player: `data.json`, three SVGs (`letter-fill`, `letter-outline`, `letter-dotted`), a `base.svg` template that mirrors the `LetterX` React components in `ejemplo/letters.js`, and an auto-generated `thum.png`. Output ships in two variants: `ligada` (cursive lowercase) and `mayusculas` (uppercase).
 
 Destination path in the downstream app is `public/lecto_pruebas_2026/assets/trazados/{ligada|mayusculas}/trazado-letra-{name}/`.
 
@@ -109,6 +109,7 @@ Each exported ZIP contains **only** these files:
 - `letter-fill.svg`
 - `letter-outline.svg`
 - `letter-dotted.svg`
+- `base.svg`
 - `thum.png`
 
 Historical placeholders (silent MP3, 1×1 transparent PNG) and the `character.png`/`fondo.png`/`audio/es/title.mp3`/`audio/val/title.mp3` files are **no longer emitted**. `generateDataJson` still writes `character: "character.png"` and `title.audio.{es,val}: "audio/{es,val}/title"` fields, but the referenced files are not in the ZIP — this is an open contract issue tracked in `PENDING-TASKS.md`.
@@ -126,10 +127,11 @@ Canvas size is **no longer** auto-computed — it's whatever the user configures
 These are not stylistic — the player selects on these ids.
 
 - `letter-fill.svg` — `<path id="fill">` (reference-font path) OR `<path id="fill1">`, `fill2`, ... (stroke-based fallback)
-- `letter-outline.svg` — `<path id="contorno">` OR `<path id="contorno1">`, ...
+- `letter-outline.svg` — `<path id="contorno">` OR `<path id="contorno1">`, ... In the stroke-based fallback the file contains **two stacked layers** over the same `d` strings: black strokes at `fillStrokeWidth` (carrying the `contornoN` ids) + white strokes at `fillStrokeWidth − 2·borderWidth` (no id) so the letter renders as a hollow outline with a white interior (matches `ejemplo/trazado-letra-a/letter-outline.svg` in spirit — visible border, see-through body). All black paths are emitted before all white paths so overlapping strokes don't leave an internal seam.
 - `letter-dotted.svg` — `<g id="path1">`, `<g id="path2">`, ... (one per stroke, indices must line up with `letterAnimationPath[i].selector`)
+- `base.svg` — template SVG mirroring the `LetterX` React components in `ejemplo/letters.js`: `<svg class="svg-letter" viewBox="0 0 W H">` containing `<rect id="letterBg">`, one `<path id="pathN" class="svgPath" stroke-width="S" d="...">` per user stroke, and `<circle id="circle" cx cy r>` at the first point of the first stroke. `stroke-width` is baked in from `animationPathStroke` in `data.json`; the circle radius follows the JSX formula `Math.ceil(stroke/1.4)`. No fill/stroke colors are set — the reader's CSS (`.svgPath`, `#letterBg`, `#circle`) paints them.
 
-All three share `viewBox="0 0 {width} {height}"` matching `letterSize` in `data.json`.
+All four SVGs share `viewBox="0 0 {width} {height}"` matching `letterSize` in `data.json`.
 
 ### State persistence across navigation
 

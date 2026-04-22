@@ -6,6 +6,7 @@ async function writeTrazadoFiles(folder, trazado) {
   folder.file('letter-fill.svg', trazado.fillSvg);
   folder.file('letter-outline.svg', trazado.outlineSvg);
   folder.file('letter-dotted.svg', trazado.dottedSvg);
+  if (trazado.baseSvg) folder.file('base.svg', trazado.baseSvg);
   folder.file('data.json', JSON.stringify(trazado.dataJson, null, 2));
 
   const [w, h] = trazado.dataJson?.letterSize || [380, 340];
@@ -66,6 +67,7 @@ export async function writeTrazadoToReader(trazado, type) {
       'letter-fill.svg': trazado.fillSvg,
       'letter-outline.svg': trazado.outlineSvg,
       'letter-dotted.svg': trazado.dottedSvg,
+      ...(trazado.baseSvg ? { 'base.svg': trazado.baseSvg } : {}),
       'thum.png': { base64: thumBase64 },
     },
   };

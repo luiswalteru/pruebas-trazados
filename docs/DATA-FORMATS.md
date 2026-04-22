@@ -136,15 +136,19 @@ SVG con la letra completamente rellena. Se usa como feedback visual cuando el us
 
 ### letter-outline.svg
 
-SVG con el contorno de la letra. Se muestra como guia visual de fondo mientras el usuario traza.
+SVG con el contorno de la letra, **interior blanco**. Misma silueta que `letter-fill.svg` pero hueca: se ve un borde negro alrededor del cuerpo y el interior es blanco, para que no tape la guia punteada ni la animacion de trazado.
 
 - Con fuente: `generateOutlineSvg` — un unico `<path id="contorno">`.
-- Sin fuente: `generateOutlineSvgFromStrokes` — un `<path id="contornoN">` por trazo.
+- Sin fuente: `generateOutlineSvgFromStrokes` — para cada trazo, dos paths stacked sobre el mismo `d`: uno negro con `stroke-width = fillStrokeWidth` (`id="contornoN"`) y otro blanco con `stroke-width = fillStrokeWidth − 2·borderWidth` (sin id). Primero todos los negros, luego todos los blancos, para que el solape entre trazos (p.ej. bucle + cola de una "a") no deje costura interna.
 
 ```xml
 <svg width="100%" height="100%" viewBox="0 0 380 340" ...>
-  <g><g><path id="contorno" d="M..."
-    style="fill:none;stroke:#000;stroke-width:3px;stroke-linecap:round;stroke-linejoin:round;"/></g></g>
+  <g><g>
+    <path id="contorno1" d="M..." style="fill:none;stroke:#000;stroke-width:40px;stroke-linecap:round;stroke-linejoin:round;"/>
+    <path id="contorno2" d="M..." style="fill:none;stroke:#000;stroke-width:40px;stroke-linecap:round;stroke-linejoin:round;"/>
+    <path d="M..." style="fill:none;stroke:#fff;stroke-width:34px;stroke-linecap:round;stroke-linejoin:round;"/>
+    <path d="M..." style="fill:none;stroke:#fff;stroke-width:34px;stroke-linecap:round;stroke-linejoin:round;"/>
+  </g></g>
 </svg>
 ```
 
@@ -176,6 +180,27 @@ Un `<path>` con `stroke-dasharray` por trazo, envuelto en `<g id="path">`. Emite
 
 > **Nota**: el bundle `ejemplo/trazado-letra-a/letter-dotted.svg` alcanza el mismo visual con **paths rellenos** (18 sub-shapes cerrados por trazo con `fill:#cecece`) en lugar de dashing. Nuestro generador produce un SVG mas compacto via `stroke-dasharray` con el mismo aspecto final (el componente consumidor renderiza igual ambos, porque el dashing de SVG es equivalente en pantalla a esas capsulas cerradas).
 
+### base.svg
+
+Template SVG que replica la estructura de los componentes `LetterX` en `ejemplo/letters.js`. Lo consume el reader: hace `fetch` del archivo como texto y lo inyecta en un `<div style={{height:340}}>` via `dangerouslySetInnerHTML`, luego anima los `<path>` con `stroke-dasharray` + `stroke-dashoffset`; `#circle` es el marcador arrastrable del punto inicial; `#letterBg` el fondo clickable.
+
+```xml
+<svg class="svg-letter" width="100%" height="100%" viewBox="0 0 380 340">
+  <rect id="letterBg" x="0" y="0" width="380" height="340"/>
+  <path id="path1" class="svgPath" stroke-width="33" fill="none" d="M..."/>
+  <path id="path2" class="svgPath" stroke-width="33" fill="none" d="M..."/>
+  <circle id="circle" cx="190" cy="85" r="24"/>
+</svg>
+```
+
+**Contrato**:
+- **Sin XML prolog ni DOCTYPE.** El reader hace `innerHTML` de este fichero dentro de un `<div>` — un `<?xml ... ?>` o DOCTYPE externo dentro de un `<div>` es HTML invalido: el parser los convierte en comentario bogus y las reglas CSS (`.svg-letter .svgPath`) no aplican, dejando los paths con `fill:black` por defecto (la letra sale en negro). Se emite el mismo shape bare `<svg>` que React renderiza desde `letters.js`.
+- Un `<path id="path{i+1}" class="svgPath" stroke-width="S" fill="none">` por trazo del usuario. `d` es el mismo `strokePaths[i].d` que usan `letter-dotted.svg` y `letter-fill.svg` (suavizado con `smooth(_, 2)`).
+- `stroke-width="S"` se embebe como numero concreto (`effStroke` = `animationPathStroke` de `data.json`). En los componentes JSX de `letters.js` este valor llega por prop `stroke`; aqui esta baked-in para que el archivo se pueda servir estatico.
+- `fill="none"` inline como **fallback de atributo de presentacion**: la regla CSS del reader (`.svg-letter .svgPath { fill:none; stroke:#f04e23 }`) tiene mayor especificidad y sobreescribe, pero si por el motivo que sea no carga, el `fill="none"` inline evita que el path se rellene en negro.
+- `<circle id="circle" cx cy r>` en el **primer punto del primer trazo** (matching el cx/cy manual de los JSX). `r = Math.ceil(stroke / 1.4)` — misma formula que usan los componentes.
+- Atributos estaticos, no JSX: `class` (no `className`), `stroke-width` (no `strokeWidth`).
+
 ### Formato SVG comun
 
 Todos los SVGs comparten:
@@ -205,6 +230,7 @@ trazado-letra-a.zip
     letter-fill.svg
     letter-outline.svg
     letter-dotted.svg
+    base.svg
     thum.png
 ```
 
@@ -218,6 +244,7 @@ trazados-ligada.zip          (o trazados-mayusculas.zip)
       letter-fill.svg
       letter-outline.svg
       letter-dotted.svg
+      base.svg
       thum.png
     trazado-letra-b/
       ...
