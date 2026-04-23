@@ -6,12 +6,12 @@ Aplicacion standalone Vite + React para generar ejercicios interactivos de traza
 
 > **Estado actual (abril 2026)**: flujo de dos-SVG-subidos. En el Paso 1 el usuario sube dos SVG por letra:
 >
-> - **`bg.svg`** — la ilustracion de fondo (letra coloreada + flechas + numero de orden + personajes decorativos).
-> - **`dotted.svg`** — el punteado que indica por donde debe pasar el trazo.
+> - **`base.svg`** — la ilustracion de fondo (letra coloreada + flechas + numero de orden + personajes decorativos).
+> - **`guia.svg`** — el punteado que indica por donde debe pasar el trazo.
 >
-> En el Paso 2 ambos se apilan (bg debajo, dotted encima) como guia visual y el usuario dibuja encima con el cursor. El ajuste al soltar el trazo se hace contra el **esqueleto extraido automaticamente de `dotted.svg`**: el extractor rasteriza el SVG, detecta los pixeles opacos, cierra los gaps entre dashes y skeletoniza.
+> En el Paso 2 ambos se apilan (`base.svg` debajo, `guia.svg` encima) como guia visual y el usuario dibuja encima con el cursor. El ajuste al soltar el trazo se hace contra el **esqueleto extraido automaticamente de `guia.svg`**: el extractor rasteriza el SVG, detecta los pixeles opacos, cierra los gaps entre dashes y skeletoniza.
 >
-> El bundle exportado **solo contiene `data.json` + `base.svg`**. `bg.svg` y `dotted.svg` se autoran aparte y los despliega el pipeline de contenido — no se re-emiten desde este generador. `letter-fill.svg`, `letter-outline.svg`, `letter-dotted.svg`, `thum.png`, `character.png` y los audios **ya no se producen**.
+> El bundle exportado **solo contiene `data.json` + `base.svg`** (plantilla de animación). Los `base.svg` y `guia.svg` que sube el usuario son solo backdrop visual para el dibujo — **no** se re-emiten desde este generador; los autora el pipeline de contenido y se despliegan aparte. Nótese la colisión de nombre: el `base.svg` que el usuario sube (ilustración) y el `base.svg` que emitimos (plantilla animable) comparten nombre pero tienen roles y contenido distintos. `letter-fill.svg`, `letter-outline.svg`, `letter-dotted.svg`, `thum.png`, `character.png` y los audios **ya no se producen**.
 >
 > Los archivos `src/utils/pathSampler.js`, `src/utils/fontParser.js`, `src/utils/thumGenerator.js` y gran parte de `src/utils/svgGenerator.js` (todo menos `generateBaseSvg`) son **codigo muerto**: no se importan en ningun lado y se mantienen solo por referencia historica.
 
@@ -55,7 +55,7 @@ trazados-generator/
     PENDING-TASKS.md                # Tareas pendientes y problemas
   ejemplo/
     trazado-letra-a/                # Carpeta de referencia. Contiene los
-                                    # inputs canonicos (bg.svg + dotted.svg)
+                                    # inputs canonicos (base.svg + guia.svg)
                                     # y tambien el bundle historico antiguo
                                     # con assets (audio/, character.png, ...)
                                     # que **ya no** refleja lo que exporta
@@ -71,7 +71,7 @@ trazados-generator/
     components/
       ManualPathDrawer.jsx          # Canvas de dibujo manual + proyeccion
                                     # del trazo al soltar sobre el esqueleto
-                                    # de dotted.svg
+                                    # de guia.svg
     utils/
       guideExtractor.js             # Rasterizado -> segmentacion -> polilinea
                                     # + proyeccion. Soporta dos modos:
@@ -92,33 +92,33 @@ trazados-generator/
 
 ### GeneratorPage - Wizard de 3 Pasos
 
-**Paso 1: Tipo, letra e imagenes** - Elegir entre "ligada" o "mayusculas", seleccionar **una sola letra** del grid (seleccion exclusiva — click en otra la reemplaza), y subir los dos SVG de referencia para esa letra: `bg.svg` (base) y `dotted.svg` (guia). Ambos son obligatorios para avanzar. El panel muestra una vista previa apilada de los dos archivos para confirmar que se alinean correctamente. El abecedario tiene 27 letras (a-z + ñ) + ch + ll.
+**Paso 1: Tipo, letra e imagenes** - Elegir entre "ligada" o "mayusculas", seleccionar **una sola letra** del grid (seleccion exclusiva — click en otra la reemplaza), y subir los dos SVG de referencia para esa letra: `base.svg` (ilustración) y `guia.svg` (punteado). Ambos son obligatorios para avanzar. El panel muestra una vista previa apilada de los dos archivos para confirmar que se alinean correctamente. El abecedario tiene 27 letras (a-z + ñ) + ch + ll.
 
-> Al subir cada SVG se parsea su `width`/`height` (con fallback a `viewBox`) y, si no coincide con el canvas configurado en el Paso 2, se emite un `console.warn` con ambos tamaños. No se sobreescriben los valores del canvas: esos alimentan `computeLetterParams` (dotSize / stroke) y cambiarlos silenciosamente alteraria el dibujo. El aviso existe para que el usuario concilie los viewBox manualmente si el reader requiere que coincidan para apilar `base.svg` con `bg.svg` / `dotted.svg`.
+> Al subir cada SVG se parsea su `width`/`height` (con fallback a `viewBox`) y, si no coincide con el canvas configurado en el Paso 2, se emite un `console.warn` con ambos tamaños. No se sobreescriben los valores del canvas: esos alimentan `computeLetterParams` (dotSize / stroke) y cambiarlos silenciosamente alteraria el dibujo. El aviso existe para que el usuario concilie los viewBox manualmente si el reader requiere que los tres viewBox (ilustración subida, guía subida, plantilla generada) coincidan para apilar sus capas.
 
-**Paso 2: Dibujar trazado** - Config (canvas w/h, dotCount, dotSize, strokeWidth) + `ManualPathDrawer` con `bg.svg` + `dotted.svg` apilados como guia visible. El usuario dibuja libre con el cursor; al soltar el mouse, el trazo se proyecta sobre la polilinea extraida del esqueleto de `dotted.svg`. Tick ✓ junto al titulo cuando hay trazado guardado. Boton "Generar y continuar" → paso 3.
+**Paso 2: Dibujar trazado** - Config (canvas w/h, dotCount, dotSize, strokeWidth) + `ManualPathDrawer` con `base.svg` + `guia.svg` apilados como guia visible. El usuario dibuja libre con el cursor; al soltar el mouse, el trazo se proyecta sobre la polilinea extraida del esqueleto de `guia.svg`. Tick ✓ junto al titulo cuando hay trazado guardado. Boton "Generar y continuar" → paso 3.
 
 **Paso 3: Exportar** - Lista de trazados generados con valores computados (canvas, dotSize, stroke, cantidad de trazos, puntos por trazo). Botones: `Preview` (navega a `/preview`), `Preview en reader` (escribe al reader local via dev-server middleware), `Exportar` (ZIP individual), `Exportar todos como ZIP` (ZIP masivo). El ZIP solo contiene `data.json` + `base.svg` por letra.
 
 ### Valores Dinamicos
 
-Solo `dotSize` y `animationPathStroke` se calculan dinamicamente (via `computeLetterParams(letter, type, canvasW)`). Canvas size siempre es lo que el usuario configura en el Paso 2.
+Solo `dotSize` se calcula dinamicamente (via `computeLetterParams(letter, type, canvasW)`). `animationPathStroke` es **fijo en 16** para que el `stroke-width` del `base.svg` generado coincida con la referencia canonica (`ejemplo/trazado-letra-a/base.svg`, `stroke-width="16"`). Canvas size siempre es lo que el usuario configura en el Paso 2.
 
 | Parametro | Ligada | Mayusculas | Como se calcula |
 |-----------|--------|------------|-----------------|
 | dotSize | 26–40 | 34 (40 si canvasW > 240) | Basado en canvasW + overrides para e, i, k, m, n, u, p |
-| animationPathStroke | 10–18 | 10 (12 si canvasW > 350) | Basado en canvasW |
+| animationPathStroke | 16 | 16 | Constante — coincide con la referencia |
 
-**Patron de override**: `0 = auto-compute` en los inputs, `>0 = forzar el valor`.
+**Patron de override**: `0 = auto-compute` en los inputs, `>0 = forzar el valor`. El usuario puede seguir forzando otro grosor desde el input `strokeWidth` del Paso 2 si necesita apartarse de 16 en un caso concreto.
 
 ### Persistencia de Estado
 
-El estado del generador (incluyendo los dos SVG cargados por letra en `images: { [letter]: { bg, dotted } }`) se persiste en `window.__generatorState` en un `useEffect` sin array de dependencias (se ejecuta cada render) para sobrevivir a la navegacion a Preview y de vuelta. El paso actual se lee/escribe en el URL param `?step=N`. El preview recibe datos via `window.__trazadoPreview`, incluyendo los SVG subidos (`bgSvg`, `dottedSvg`) para reproducir fielmente el fondo visible.
+El estado del generador (incluyendo los dos SVG cargados por letra en `images: { [letter]: { base, guia } }`) se persiste en `window.__generatorState` en un `useEffect` sin array de dependencias (se ejecuta cada render) para sobrevivir a la navegacion a Preview y de vuelta. El paso actual se lee/escribe en el URL param `?step=N`. El preview recibe datos via `window.__trazadoPreview`, incluyendo los SVG subidos (`baseSvg`, `guiaSvg`) para reproducir fielmente el fondo visible.
 
 ### PreviewPage - Preview Interactivo
 
 Simula el trazado real como lo haria el componente React de la app educativa:
-- Apila `bg.svg` + `dotted.svg` de fondo (igual que en el drawer)
+- Apila `base.svg` (ilustración) + `guia.svg` de fondo (igual que en el drawer)
 - El usuario hace click para iniciar, luego mueve el cursor por los puntos
 - Hit radius generoso: `max(dotSize, 28)` px
 - Multi-stroke: al completar un trazo avanza al siguiente
@@ -135,7 +135,7 @@ trazado-letra-{nombre}/
   base.svg                # Template animable del reader (paths + circle)
 ```
 
-Nada mas. `bg.svg` y `dotted.svg` los autora el pipeline de contenido y llegan al reader por otra via — esta herramienta solo genera lo que depende de los trazos dibujados.
+Nada mas. La ilustración y la guía punteada las autora el pipeline de contenido y llegan al reader por otra via — esta herramienta solo genera lo que depende de los trazos dibujados.
 
 ### Nombrado de Carpetas
 
@@ -162,7 +162,7 @@ trazados-ligada.zip
 
 `ejemplo/trazado-letra-a/` contiene los inputs canonicos del nuevo flujo:
 
-- **`bg.svg`** — shape de la ilustracion de fondo que se espera subir en el Paso 1 (slot "bg").
-- **`dotted.svg`** — shape del punteado guia que se espera subir en el Paso 1 (slot "dotted").
+- **`base.svg`** — shape de la ilustracion de fondo que se espera subir en el Paso 1 (slot "base").
+- **`guia.svg`** — shape del punteado guia que se espera subir en el Paso 1 (slot "guia").
 
 Tambien contiene el bundle historico antiguo (`letter-fill.svg`, `letter-outline.svg`, `letter-dotted.svg`, `character.png`, `fondo.png`, audios, `thum.png`) de cuando la herramienta producia todos esos archivos. **Ese bundle ya no se genera** — utilizarlo solo como referencia de que esperaba el reader en iteraciones anteriores.

@@ -9,10 +9,11 @@ const ALL_LETTERS = [...SPANISH_LETTERS, ...SPECIAL_COMBOS]
 
 /**
  * Parse intrinsic width/height from an SVG data URL. The uploaded SVGs dictate
- * the letter-space coordinate system: `base.svg`'s viewBox must match
- * `bg.svg`'s (and by extension `dotted.svg`'s) so the reader can stack all
- * three layers without misalignment. Looks at the `width`/`height` attributes
- * first, falls back to `viewBox`. Returns `null` if nothing parseable.
+ * the letter-space coordinate system: the generated animation template's
+ * viewBox must match the uploaded illustration (`base.svg`) and dashed guide
+ * (`guia.svg`) so the reader can stack all layers without misalignment. Looks
+ * at the `width`/`height` attributes first, falls back to `viewBox`. Returns
+ * `null` if nothing parseable.
  */
 function parseSvgDims(dataUrl) {
   if (!dataUrl || typeof dataUrl !== 'string') return null
@@ -62,7 +63,7 @@ export default function GeneratorPage() {
   const [generatedTrazados, setGeneratedTrazados] = useState(_persisted.generatedTrazados || {})
   const [generating, setGenerating] = useState(false)
   const [currentStep, setCurrentStep] = useState(initialStep)
-  const [dotCount, setDotCount] = useState(_persisted.dotCount ?? 0)
+  const [dotCount, setDotCount] = useState(_persisted.dotCount ?? 35)
   const [dotSize, setDotSize] = useState(_persisted.dotSize ?? 0)
   const [canvasWidth, setCanvasWidth] = useState(_persisted.canvasWidth || 380)
   const [canvasHeight, setCanvasHeight] = useState(_persisted.canvasHeight || 340)
@@ -74,16 +75,19 @@ export default function GeneratorPage() {
   // one at a time is allowed), so we derive it from selectedLetters[0].
   const activeLetter = selectedLetters[0] || null
 
-  // Per-letter reference SVGs: { [letter]: { bg: dataURL, dotted: dataURL } }.
-  // bg.svg is the background illustration, dotted.svg is the dashed tracing
+  // Per-letter reference SVGs: { [letter]: { base: dataURL, guia: dataURL } }.
+  // base.svg is the background illustration; guia.svg is the dashed tracing
   // guide rendered on top. Both are required before the user can advance to
-  // Step 2.
+  // Step 2. Note: the uploaded `base.svg` is distinct from the `base.svg` the
+  // generator emits — the former is an illustration consumed only by the
+  // drawer / preview, the latter is the animation template the reader
+  // consumes. They share a filename but never live in the same scope here.
   const [images, setImages] = useState(_persisted.images || {})
-  const bgInputRef = useRef(null)
-  const dottedInputRef = useRef(null)
+  const baseInputRef = useRef(null)
+  const guiaInputRef = useRef(null)
   const activeImages = activeLetter ? (images[activeLetter] || {}) : {}
-  const activeBg = activeImages.bg || ''
-  const activeDotted = activeImages.dotted || ''
+  const activeBase = activeImages.base || ''
+  const activeGuia = activeImages.guia || ''
 
   // Persist state on every change so it survives navigation
   useEffect(() => {
@@ -99,8 +103,8 @@ export default function GeneratorPage() {
     setSelectedLetters(prev => (prev[0] === letter ? [] : [letter]))
   }, [])
 
-  // Reference SVG upload for the active letter. `kind` is 'bg' or 'dotted' —
-  // both must be set before the user can advance to Step 2. The dotted SVG is
+  // Reference SVG upload for the active letter. `kind` is 'base' or 'guia' —
+  // both must be set before the user can advance to Step 2. The guia SVG is
   // used as the snap skeleton by the drawer.
   //
   // We do NOT auto-override canvasWidth/canvasHeight from the uploaded SVG's
@@ -109,8 +113,9 @@ export default function GeneratorPage() {
   // size — silently changing them resized the drawing area and the stroke
   // thickness. Instead we warn in the console when the canvas and the SVG's
   // viewBox differ, so the user can reconcile them manually if the reader
-  // needs matching viewBoxes for stacking. The `base.svg` viewBox stays
-  // aligned with `data.json.letterSize`, which is the canonical letter-space.
+  // needs matching viewBoxes for stacking. The generated animation template's
+  // viewBox stays aligned with `data.json.letterSize`, which is the canonical
+  // letter-space.
   const handleSvgUpload = useCallback((kind) => (e) => {
     const file = e.target.files[0]
     if (!file || !activeLetter) return
@@ -125,8 +130,8 @@ export default function GeneratorPage() {
       if (dims && (dims.width !== canvasWidth || dims.height !== canvasHeight)) {
         console.warn(
           `[GeneratorPage] ${kind}.svg mide ${dims.width}×${dims.height}, ` +
-          `canvas actual ${canvasWidth}×${canvasHeight}. Si los viewBox deben coincidir ` +
-          `para el reader, ajusta canvas manualmente en el paso 2.`,
+          `canvas actual ${canvasWidth}×${canvasHeight}. Si los viewBox deben ` +
+          `coincidir para el reader, ajusta canvas manualmente en el paso 2.`,
         )
       }
     }
@@ -155,9 +160,9 @@ export default function GeneratorPage() {
   }, [])
 
   // Generate trazado for a single letter from the manual drawing. The bundle
-  // is now just data.json + base.svg — letter-fill/outline/dotted.svg and
-  // thum.png are no longer produced (bg.svg and dotted.svg are uploaded
-  // directly in Step 1 and, for this flow, only used as drawing guides).
+  // is now just data.json + base.svg (animation template) — the uploaded
+  // base.svg illustration and guia.svg guide are only used as drawing
+  // backdrops in Step 1/2 and are not re-emitted by this tool.
   const generateForLetter = useCallback((letter) => {
     const manual = manualDrawings[letter]
     if (!manual) {
@@ -241,18 +246,20 @@ export default function GeneratorPage() {
     await exportAllTrazados(trazadosList, type)
   }, [generatedTrazados, type])
 
-  // Preview single. The preview uses the uploaded bg.svg + dotted.svg as the
-  // visual backdrop (since we no longer generate letter-fill/outline/dotted)
-  // and `base.svg` for the animated stroke path.
+  // Preview single. The preview uses the uploaded base.svg illustration +
+  // guia.svg dashed guide as the visual backdrop. The generated animation
+  // template (`trazado.baseSvg`) is not consumed by PreviewPage directly —
+  // PreviewPage re-renders the strokes from `dataJson.dotList` — so we don't
+  // include it in the payload and sidestep the name collision with the
+  // uploaded `base.svg`.
   const handlePreview = useCallback((letter) => {
     const trazado = generatedTrazados[letter]
     if (!trazado || trazado.error) return
     const uploaded = images[letter] || {}
     const previewData = {
       dataJson: trazado.dataJson,
-      baseSvg: trazado.baseSvg,
-      bgSvg: uploaded.bg || '',
-      dottedSvg: uploaded.dotted || '',
+      baseSvg: uploaded.base || '',
+      guiaSvg: uploaded.guia || '',
     }
     window.__trazadoPreview = previewData
     navigate('/preview')
@@ -281,7 +288,7 @@ export default function GeneratorPage() {
     }
   }, [generatedTrazados, type])
 
-  const canAdvanceFromStep1 = !!activeLetter && !!activeBg && !!activeDotted
+  const canAdvanceFromStep1 = !!activeLetter && !!activeBase && !!activeGuia
   const canGenerate = !generating
     && selectedLetters.length > 0
     && selectedLetters.every(l => manualDrawings[l])
@@ -337,13 +344,13 @@ export default function GeneratorPage() {
           <div className="letter-grid">
             {ALL_LETTERS.map(letter => {
               const imgs = images[letter] || {}
-              const ready = !!imgs.bg && !!imgs.dotted
+              const ready = !!imgs.base && !!imgs.guia
               return (
                 <button
                   key={letter}
                   className={`letter-btn ${selectedLetters.includes(letter) ? 'selected' : ''} ${ready ? 'has-image' : ''}`}
                   onClick={() => toggleLetter(letter)}
-                  title={ready ? 'bg.svg y dotted.svg cargados' : (imgs.bg || imgs.dotted ? 'Falta uno de los dos SVG' : '')}
+                  title={ready ? 'base.svg y guia.svg cargados' : (imgs.base || imgs.guia ? 'Falta uno de los dos SVG' : '')}
                 >
                   <span className="letter-display">
                     {type === 'mayusculas' ? letter.toUpperCase() : letter}
@@ -357,7 +364,7 @@ export default function GeneratorPage() {
           {/* Two-SVG upload panel for the selected letter */}
           <div className="image-upload-panel" style={{ marginTop: 24, padding: 16, background: '#f5f5f5', borderRadius: 8 }}>
             <h3 style={{ marginBottom: 12, fontSize: '1rem' }}>
-              Imágenes de referencia (bg.svg + dotted.svg)
+              Imágenes de referencia (base.svg + guia.svg)
               {activeLetter && (
                 <span style={{ color: '#f04e23', marginLeft: 8 }}>
                   — letra {type === 'mayusculas' ? activeLetter.toUpperCase() : activeLetter}
@@ -374,16 +381,16 @@ export default function GeneratorPage() {
             {activeLetter && (
               <>
                 <p style={{ fontSize: '0.85rem', color: '#666', marginBottom: 12 }}>
-                  Carga dos archivos SVG por letra: <b>bg.svg</b> (la base que
-                  se ve detrás) y <b>dotted.svg</b> (la línea punteada que
-                  indica por dónde debe pasar el trazo). El dotted.svg se
+                  Carga dos archivos SVG por letra: <b>base.svg</b> (la
+                  ilustración de fondo) y <b>guia.svg</b> (la línea punteada
+                  que indica por dónde debe pasar el trazo). La guia.svg se
                   utiliza además como esqueleto para ajustar los trazos al
                   soltar el cursor.
                 </p>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
                   {[
-                    { key: 'bg', label: 'bg.svg (base)', value: activeBg, ref: bgInputRef },
-                    { key: 'dotted', label: 'dotted.svg (guía)', value: activeDotted, ref: dottedInputRef },
+                    { key: 'base', label: 'base.svg (ilustración)', value: activeBase, ref: baseInputRef },
+                    { key: 'guia', label: 'guia.svg (punteado)', value: activeGuia, ref: guiaInputRef },
                   ].map(slot => (
                     <div key={slot.key} style={{
                       padding: 12, background: '#fff', border: '1px solid #ddd', borderRadius: 6,
@@ -426,7 +433,7 @@ export default function GeneratorPage() {
                   ))}
                 </div>
 
-                {activeBg && activeDotted && (
+                {activeBase && activeGuia && (
                   <div style={{
                     marginTop: 12, padding: 10, background: '#fff',
                     border: '1px solid #ddd', borderRadius: 6,
@@ -437,8 +444,8 @@ export default function GeneratorPage() {
                       background: '#fafafa', border: '1px solid #eee', borderRadius: 4,
                       margin: '0 auto', overflow: 'hidden',
                     }}>
-                      <img src={activeBg} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }} />
-                      <img src={activeDotted} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }} />
+                      <img src={activeBase} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }} />
+                      <img src={activeGuia} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }} />
                     </div>
                   </div>
                 )}
@@ -506,8 +513,8 @@ export default function GeneratorPage() {
                 key={activeLetter}
                 letter={activeLetter}
                 type={type}
-                bgSvg={activeBg}
-                dottedSvg={activeDotted}
+                baseSvg={activeBase}
+                guiaSvg={activeGuia}
                 width={canvasWidth}
                 height={canvasHeight}
                 dotCount={dotCount}

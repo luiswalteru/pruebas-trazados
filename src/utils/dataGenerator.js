@@ -85,16 +85,17 @@ export const SPANISH_LETTERS = [
 export const SPECIAL_COMBOS = ['ch', 'll'];
 
 /**
- * Compute recommended dotSize and animationPathStroke for a letter based on
- * the patterns found in the existing lecto_pruebas_2026 trazados.
+ * Compute recommended dotSize and animationPathStroke for a letter.
  *
- * Ligada:
- *   - dotSize: 26–40  (smaller for narrow letters like b,d,j,l; bigger for wide/simple like e,n,u)
- *   - animationPathStroke: 10–18  (12 for narrow, 16 for normal, 18 for simple)
+ * `animationPathStroke` is fixed at 16 — matches the canonical reference
+ * `ejemplo/trazado-letra-a/data.json` and its paired `base.svg`, which render
+ * the trazado with `stroke-width="16"`. All generated `base.svg` files must
+ * emit the same value so the visual weight of the animated stroke is
+ * consistent with the reference across letters. The user can still override
+ * via the `strokeWidth` input in Step 2 (`0 = use this default`).
  *
- * Mayúsculas:
- *   - dotSize: mostly 34  (range 33–40)
- *   - animationPathStroke: mostly 10  (range 10–12)
+ * `dotSize` still varies by canvas width and per-letter overrides to match
+ * the tuning in the existing `lecto_pruebas_2026` bundles.
  *
  * @param {string} letter   e.g. 'a', 'ch'
  * @param {string} type     'ligada' | 'mayusculas'
@@ -102,53 +103,35 @@ export const SPECIAL_COMBOS = ['ch', 'll'];
  * @returns {{ dotSize: number, animationPathStroke: number }}
  */
 export function computeLetterParams(letter, type, canvasW) {
+  const animationPathStroke = 16;
+
   if (type === 'mayusculas') {
-    // Mayúsculas: very consistent values
-    const isWide = canvasW > 350;  // CH, LL
     return {
       dotSize: canvasW > 240 ? 40 : 34,
-      animationPathStroke: isWide ? 12 : 10,
+      animationPathStroke,
     };
   }
 
-  // Ligada: varies more — use canvas width as a proxy for letter complexity
-  let dotSize, animationPathStroke;
-
+  // Ligada: dotSize varies by canvas width as a proxy for letter complexity
+  let dotSize;
   if (canvasW <= 200) {
-    // Narrow letters like f, l, t, j
-    dotSize = 28;
-    animationPathStroke = 10;
+    dotSize = 28;           // narrow: f, l, t, j
   } else if (canvasW <= 300) {
-    // Medium-narrow: b, d, g, h, y, q
-    dotSize = 28;
-    animationPathStroke = 12;
+    dotSize = 28;           // medium-narrow: b, d, g, h, y, q
   } else if (canvasW <= 400) {
-    // Normal width: a, c, e, o, r, s, z, etc.
-    dotSize = 33;
-    animationPathStroke = 16;
+    dotSize = 33;           // normal: a, c, e, o, r, s, z
   } else if (canvasW <= 500) {
-    // Wide: ch, n, v, x
-    dotSize = 36;
-    animationPathStroke = 16;
+    dotSize = 36;           // wide: ch, n, v, x
   } else {
-    // Very wide: m, w
-    dotSize = 38;
-    animationPathStroke = 16;
+    dotSize = 38;           // very wide: m, w
   }
 
-  // Special overrides matching existing data
-  const overrides = {
-    'e': { dotSize: 40, animationPathStroke: 16 },
-    'i': { dotSize: 40, animationPathStroke: 18 },
-    'k': { dotSize: 38, animationPathStroke: 12 },
-    'm': { dotSize: 38, animationPathStroke: 16 },
-    'n': { dotSize: 40, animationPathStroke: 16 },
-    'u': { dotSize: 40, animationPathStroke: 16 },
-    'p': { dotSize: 27, animationPathStroke: 10 },
+  // Per-letter dotSize overrides matching existing data
+  const dotSizeOverrides = {
+    e: 40, i: 40, k: 38, m: 38, n: 40, u: 40, p: 27,
   };
-
-  if (overrides[letter]) {
-    return overrides[letter];
+  if (dotSizeOverrides[letter] != null) {
+    dotSize = dotSizeOverrides[letter];
   }
 
   return { dotSize, animationPathStroke };

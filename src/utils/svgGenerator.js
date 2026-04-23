@@ -175,12 +175,20 @@ export function generateBaseSvg(strokePaths, width, height, stroke) {
   const strokeW = Math.max(1, Math.round(stroke));
   const circleR = Math.ceil(strokeW / 1.4);
 
+  // Inline `stroke="#f04e23"` + `fill="none"` as presentation-attribute
+  // fallbacks. The reader's CSS (`.svg-letter .svgPath { fill:none; stroke:#f04e23 }`)
+  // wins once it's loaded, but without the inline attrs the path renders
+  // black-filled during the brief window before CSS applies, or entirely
+  // when CSS fails to load.
   const pathElements = (strokePaths || []).map((p, i) =>
-    `<path id="path${i + 1}" class="svgPath" stroke-width="${strokeW}" fill="none" d="${p.d}"/>`
+    `<path id="path${i + 1}" class="svgPath" stroke="#f04e23" fill="none" stroke-width="${strokeW}" d="${p.d}"/>`
   ).join('\n  ');
 
-  // Marker circle goes at the first point of the first stroke — same spot
-  // where the JSX components place `<circle id="circle" cx cy />`.
+  // Marker circle at the first point of the first stroke — same spot where
+  // the JSX components place `<circle id="circle" cx cy />`. `fill="blue"`
+  // matches the reference `base.svg` shipped with the reader catalogue; the
+  // reader may override via CSS, but the inline attribute guarantees a
+  // visible marker if styles haven't kicked in yet.
   const first = strokePaths?.[0]?.points?.[0];
   const cx = first ? Math.round(first.x) : 0;
   const cy = first ? Math.round(first.y) : 0;
@@ -188,6 +196,6 @@ export function generateBaseSvg(strokePaths, width, height, stroke) {
   return `<svg class="svg-letter" width="100%" height="100%" viewBox="0 0 ${width} ${height}">
   <rect id="letterBg" x="0" y="0" width="${width}" height="${height}"/>
   ${pathElements}
-  <circle id="circle" cx="${cx}" cy="${cy}" r="${circleR}"/>
+  <circle id="circle" cx="${cx}" cy="${cy}" r="${circleR}" fill="blue"/>
 </svg>`;
 }

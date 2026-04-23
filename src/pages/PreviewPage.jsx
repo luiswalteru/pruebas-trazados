@@ -24,6 +24,14 @@ export default function PreviewPage() {
     }
   }, [])
 
+  // Manual upload accepts the files the user has on disk. The uploaded
+  // illustration is expected as `base.svg` — same filename as the animation
+  // template the generator emits, but here it's treated as the visual
+  // backdrop (the preview re-renders the animation from `dotList`, so the
+  // generated template is not consumed here). If a user drops both a
+  // generated `base.svg` and an uploaded illustration called `base.svg` in
+  // the same selection, the second one wins; manual upload is a fallback
+  // path — the common flow is the handoff from the generator.
   const handleFileUpload = useCallback(async (e) => {
     const files = e.target.files
     if (!files?.length) return
@@ -32,8 +40,7 @@ export default function PreviewPage() {
       const text = await file.text()
       if (file.name === 'data.json') data.dataJson = JSON.parse(text)
       else if (file.name === 'base.svg') data.baseSvg = text
-      else if (file.name === 'bg.svg') data.bgSvg = text
-      else if (file.name === 'dotted.svg') data.dottedSvg = text
+      else if (file.name === 'guia.svg') data.guiaSvg = text
     }
     if (data.dataJson) { setPreviewData(data); resetAll() }
   }, [])
@@ -148,14 +155,17 @@ export default function PreviewPage() {
             Cargar archivos de trazado
             <input type="file" multiple accept=".json,.svg" onChange={handleFileUpload} style={{ display: 'none' }} />
           </label>
-          <p className="info-text">Selecciona data.json, base.svg y opcionalmente bg.svg + dotted.svg</p>
+          <p className="info-text">Selecciona data.json, base.svg (ilustración) y opcionalmente guia.svg (punteado)</p>
         </div>
       </div>
     )
   }
 
   // ---- Render -------------------------------------------------------------
-  const { dataJson, bgSvg, dottedSvg } = previewData
+  // `baseSvg` here is the uploaded illustration (not the animation template
+  // the generator emits). `guiaSvg` is the dashed guide. Both are optional —
+  // the preview renders the animation from `dataJson.dotList` on its own.
+  const { dataJson, baseSvg, guiaSvg } = previewData
   const dots = currentDotList?.coordinates ?? []
 
   return (
@@ -207,31 +217,31 @@ export default function PreviewPage() {
           position: 'relative',
         }}>
 
-          {/* Background layer (bg.svg) — shown under everything */}
-          {bgSvg && (
-            bgSvg.startsWith('data:') || bgSvg.startsWith('http')
-              ? <img src={bgSvg} alt="" className="preview-layer"
+          {/* Background layer (base.svg illustration) — shown under everything */}
+          {baseSvg && (
+            baseSvg.startsWith('data:') || baseSvg.startsWith('http')
+              ? <img src={baseSvg} alt="" className="preview-layer"
                   style={{ position: 'absolute', inset: 0, zIndex: 1,
                            width: '100%', height: '100%', objectFit: 'contain',
                            pointerEvents: 'none' }}
                 />
               : <div className="preview-layer"
                   style={{ position: 'absolute', inset: 0, zIndex: 1 }}
-                  dangerouslySetInnerHTML={{ __html: bgSvg }}
+                  dangerouslySetInnerHTML={{ __html: baseSvg }}
                 />
           )}
 
-          {/* Dotted guide (dotted.svg) — overlaid on bg */}
-          {dottedSvg && (
-            dottedSvg.startsWith('data:') || dottedSvg.startsWith('http')
-              ? <img src={dottedSvg} alt="" className="preview-layer"
+          {/* Dashed guide (guia.svg) — overlaid on the illustration */}
+          {guiaSvg && (
+            guiaSvg.startsWith('data:') || guiaSvg.startsWith('http')
+              ? <img src={guiaSvg} alt="" className="preview-layer"
                   style={{ position: 'absolute', inset: 0, zIndex: 2,
                            width: '100%', height: '100%', objectFit: 'contain',
                            pointerEvents: 'none' }}
                 />
               : <div className="preview-layer"
                   style={{ position: 'absolute', inset: 0, zIndex: 2 }}
-                  dangerouslySetInnerHTML={{ __html: dottedSvg }}
+                  dangerouslySetInnerHTML={{ __html: guiaSvg }}
                 />
           )}
 

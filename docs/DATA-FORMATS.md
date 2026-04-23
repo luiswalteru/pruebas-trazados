@@ -10,7 +10,7 @@ trazado-letra-{nombre}/
   base.svg
 ```
 
-`bg.svg` y `dotted.svg` se suben en el Paso 1 y **no** se re-emiten en el ZIP — los autora el pipeline de contenido aparte. Tampoco hay `letter-fill.svg`, `letter-outline.svg`, `letter-dotted.svg`, `thum.png`, `character.png` ni audios: ninguno se genera desde este refactor.
+`base.svg` (ilustración) y `guia.svg` (punteado) se suben en el Paso 1 y **no** se re-emiten en el ZIP — los autora el pipeline de contenido aparte. Nota: el `base.svg` subido comparte nombre con el `base.svg` que emitimos (la plantilla animable), pero son ficheros distintos: la ilustración es solo backdrop del dibujo, la plantilla es el SVG con los `<path>` animables del reader. Tampoco hay `letter-fill.svg`, `letter-outline.svg`, `letter-dotted.svg`, `thum.png`, `character.png` ni audios: ninguno se genera desde este refactor.
 
 ---
 
@@ -64,7 +64,7 @@ El shape coincide con `ejemplo/trazado-letra-a/data.json`, que es la referencia 
 |-------|------|-------------|
 | `letter` | string | Identificador. Ligada: `"a"`, `"b"`, `"ch"`, `"ll"`, `"ñ"`. Mayusculas: `"UpperA"`, `"UpperCh"`, `"UpperLl"`, `"UpperÑ"` (ver nota abajo) |
 | `letterSize` | `[width, height]` | Dimensiones del canvas. Siempre el valor configurado por el usuario en el Paso 2 (default 380×340) |
-| `animationPathStroke` | number | Grosor del trazo de animacion. Auto: ligada 10–18, mayusculas 10–12 via `computeLetterParams`. O forzado por el usuario |
+| `animationPathStroke` | number | Grosor del trazo de animacion. **Fijo en 16** via `computeLetterParams` para que coincida con `stroke-width="16"` de la referencia `ejemplo/trazado-letra-a/base.svg`. El usuario puede forzar otro valor desde el input `strokeWidth` del Paso 2 |
 | `letterAnimationPath` | array | Selectores CSS (`#path1`, `#path2`, ...) que apuntan a los `<path>` dentro de `base.svg`, con su tiempo de animacion |
 | `dotSize` | number | Tamano visual de cada punto. Auto: ligada 26–40, mayusculas 34–40 via `computeLetterParams`. O forzado por el usuario |
 | `playButtonPosition` | `[x, y]` | Posicion relativa del boton play — constante `[-20, 30]` |
@@ -93,7 +93,7 @@ Cada elemento del array `dotList` representa un trazo (stroke) del trazado:
 }
 ```
 
-- **`dragger`**: Coordenadas enteras `[x, y]` del punto de inicio del trazo (primer punto redondeado via `toFixed(0)`)
+- **`dragger`**: Coordenadas enteras `[x, y]` donde el reader posiciona la **esquina superior-izquierda** del `#fixedDot` (un `div` de 20×20 px colocado con `transform: translate(x px, y px)`). Se calcula como `(resampled[0].x − 10, resampled[0].y − 10)` para que el centro visual del div caiga sobre el primer punto del trazo. Sin esta resta, el fixedDot aparece 10 px abajo-a-la-derecha del inicio del trazo (bug visible al finalizar la animación en el reader)
 - **`coordinates`**: Array de puntos que forman el recorrido del trazo
   - `coords`: Array `[x, y]` con 3 decimales, en espacio de letra (px del canvas)
   - `corner` (opcional): `true` si el punto es una esquina/cambio de direccion (angulo > 45°)
@@ -102,11 +102,11 @@ Cada elemento del array `dotList` representa un trazo (stroke) del trazado:
 
 `ManualPathDrawer.handleFinalize` construye el dotList asi:
 
-1. Toma los trazos dibujados (arrays crudos de `{x, y}` ya filtrados por distancia minima y suavizados por EMA, y proyectados al soltar sobre el esqueleto de `dotted.svg` via `projectStrokeOnGuide`).
+1. Toma los trazos dibujados (arrays crudos de `{x, y}` ya filtrados por distancia minima y suavizados por EMA, y proyectados al soltar sobre el esqueleto de `guia.svg` via `projectStrokeOnGuide`).
 2. Por cada trazo: `resample` a `dotCount` puntos equidistantes.
 3. Aplica `toFixed(3)` a cada `coords`.
 4. Marca esquinas con `corner: true` (diferencia de angulo entrada/salida > π/4).
-5. Extrae `dragger` del primer punto resampleado via `toFixed(0)`.
+5. Extrae `dragger` del primer punto resampleado, restando `(10, 10)` para centrar el `#fixedDot` (20×20 px) del reader sobre el punto de inicio; luego `toFixed(0)`.
 
 ### Multi-stroke (letras con varios trazos)
 
@@ -138,19 +138,19 @@ Template SVG que replica la estructura de los componentes `LetterX` en `ejemplo/
 ```xml
 <svg class="svg-letter" width="100%" height="100%" viewBox="0 0 380 340">
   <rect id="letterBg" x="0" y="0" width="380" height="340"/>
-  <path id="path1" class="svgPath" stroke-width="16" fill="none" d="M..."/>
-  <path id="path2" class="svgPath" stroke-width="16" fill="none" d="M..."/>
-  <circle id="circle" cx="190" cy="85" r="12"/>
+  <path id="path1" class="svgPath" stroke="#f04e23" fill="none" stroke-width="16" d="M..."/>
+  <path id="path2" class="svgPath" stroke="#f04e23" fill="none" stroke-width="16" d="M..."/>
+  <circle id="circle" cx="190" cy="85" r="12" fill="blue"/>
 </svg>
 ```
 
 **Contrato**:
 
 - **Sin XML prolog ni DOCTYPE.** El reader hace `innerHTML` de este fichero dentro de un `<div>` — un `<?xml ... ?>` o DOCTYPE externo dentro de un `<div>` es HTML invalido: el parser los convierte en comentario bogus y las reglas CSS (`.svg-letter .svgPath`) no aplican, dejando los paths con `fill:black` por defecto (la letra sale en negro). Se emite el mismo shape bare `<svg>` que React renderiza desde `letters.js`.
-- Un `<path id="path{i+1}" class="svgPath" stroke-width="S" fill="none">` por trazo del usuario. `d` es `strokePaths[i].d` construido por `ManualPathDrawer.handleFinalize` como `M x,y L x,y ...` sobre los puntos suavizados con `smooth(_, 2)` (antes del resample).
-- `stroke-width="S"` se embebe como numero concreto (`effStroke` = `animationPathStroke` de `data.json`). En los componentes JSX de `letters.js` este valor llega por prop `stroke`; aqui esta baked-in para que el archivo se pueda servir estatico.
-- `fill="none"` inline como **fallback de atributo de presentacion**: la regla CSS del reader (`.svg-letter .svgPath { fill:none; stroke:#f04e23 }`) tiene mayor especificidad y sobreescribe, pero si por el motivo que sea no carga, el `fill="none"` inline evita que el path se rellene en negro.
-- `<circle id="circle" cx cy r>` en el **primer punto del primer trazo** (matching el cx/cy manual de los JSX). `r = Math.ceil(stroke / 1.4)` — misma formula que usan los componentes.
+- Un `<path id="path{i+1}" class="svgPath" stroke="#f04e23" fill="none" stroke-width="S">` por trazo del usuario. `d` es `strokePaths[i].d` construido por `ManualPathDrawer.handleFinalize` como `M x,y L x,y ...` sobre los puntos suavizados con `smooth(_, 2)` (antes del resample).
+- `stroke-width="S"` se embebe como numero concreto (`effStroke` = `animationPathStroke` de `data.json`, **fijo en 16** salvo override del usuario). En los componentes JSX de `letters.js` este valor llega por prop `stroke`; aqui esta baked-in para que el archivo se pueda servir estatico.
+- `stroke="#f04e23"` y `fill="none"` inline como **fallbacks de atributo de presentacion**: la regla CSS del reader (`.svg-letter .svgPath { fill:none; stroke:#f04e23 }`) tiene mayor especificidad y sobreescribe, pero si no carga, los atributos inline evitan que el path salga negro o sin color.
+- `<circle id="circle" cx cy r fill="blue">` en el **primer punto del primer trazo** (matching el cx/cy manual de los JSX). `r = Math.ceil(stroke / 1.4)` — misma formula que usan los componentes. `fill="blue"` inline reproduce el marcador visible del `base.svg` de referencia.
 - Atributos estaticos, no JSX: `class` (no `className`), `stroke-width` (no `strokeWidth`).
 
 ---
@@ -159,20 +159,20 @@ Template SVG que replica la estructura de los componentes `LetterX` en `ejemplo/
 
 Estos no son parte del bundle de salida, pero definen el flujo de trazado:
 
-### bg.svg
+### base.svg (subido por el usuario)
 
-La ilustracion de fondo: letra coloreada, flechas direccionales, numero de orden del trazo, cualquier decoracion. Se muestra como capa base en el drawer (zIndex 1) y en el preview. **No** se inspecciona programaticamente — solo se renderiza como imagen.
+La ilustracion de fondo: letra coloreada, flechas direccionales, numero de orden del trazo, cualquier decoracion. Se muestra como capa base en el drawer (zIndex 1) y en el preview. **No** se inspecciona programaticamente — solo se renderiza como imagen. No se confunda con el `base.svg` que genera esta herramienta (plantilla de animación con `<path class="svgPath">` para el reader): son dos ficheros distintos que simplemente comparten nombre.
 
-Ver `ejemplo/trazado-letra-a/bg.svg` como forma canonica.
+Ver `ejemplo/trazado-letra-a/base.svg` como forma canonica.
 
-### dotted.svg
+### guia.svg
 
 El punteado guia que indica por donde pasa el trazo. Sirve dos proposito:
 
-1. **Guia visual**: se renderiza encima de `bg.svg` (zIndex 2) en el drawer y el preview para que el usuario sepa por donde trazar.
+1. **Guia visual**: se renderiza encima de `base.svg` (zIndex 2) en el drawer y el preview para que el usuario sepa por donde trazar.
 2. **Esqueleto de snap**: `guideExtractor.extractGuideFromSvg` lo rasteriza, binariza por pixel opaco (`alpha >= 64`), cierra los gaps entre dashes (`closePasses: 4`) y skeletoniza con Zhang-Suen para producir la polilinea contra la que se ajustan los trazos al soltar el mouse.
 
-Ver `ejemplo/trazado-letra-a/dotted.svg` como forma canonica.
+Ver `ejemplo/trazado-letra-a/guia.svg` como forma canonica.
 
 ---
 

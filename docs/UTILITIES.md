@@ -1,6 +1,6 @@
 # Utilidades - Documentacion Tecnica
 
-> **Importante (abril 2026)**: La app es dibujo manual con proyeccion al soltar sobre el esqueleto de un `dotted.svg` subido por el usuario. Las utilidades "core" del flujo actual son `guideExtractor.js` (extraccion del esqueleto + proyeccion), `letterMask.js` (fallback raster), `dataGenerator.js`, `svgGenerator.generateBaseSvg` y `exportUtils.js`.
+> **Importante (abril 2026)**: La app es dibujo manual con proyeccion al soltar sobre el esqueleto de un `guia.svg` subido por el usuario. Las utilidades "core" del flujo actual son `guideExtractor.js` (extraccion del esqueleto + proyeccion), `letterMask.js` (fallback raster), `dataGenerator.js`, `svgGenerator.generateBaseSvg` y `exportUtils.js`.
 >
 > **Codigo muerto** (no se importa en ningun lado, conservado como referencia): `fontParser.js`, `pathSampler.js`, `thumGenerator.js`, y todo `svgGenerator.js` excepto `generateBaseSvg` (`generateFillSvg`, `generateFillSvgFromStrokes`, `generateOutlineSvg`, `generateOutlineSvgFromStrokes`, `generateDottedSvg`). Tambien `letterMask.buildLetterMask` y `dataGenerator.computeDotCount` siguen exportados pero sin callers.
 
@@ -8,7 +8,7 @@
 
 ## guideExtractor.js (CORE)
 
-Extrae el esqueleto desde el `dotted.svg` subido por el usuario, y proyecta los trazos dibujados sobre la polilinea resultante. Es el corazon del ajuste al soltar el trazo.
+Extrae el esqueleto desde el `guia.svg` subido por el usuario, y proyecta los trazos dibujados sobre la polilinea resultante. Es el corazon del ajuste al soltar el trazo.
 
 ### Pipeline
 
@@ -18,7 +18,7 @@ Extrae el esqueleto desde el `dotted.svg` subido por el usuario, y proyecta los 
    - `'any-opaque'` (flujo SVG actual): canvas transparente, pixel cuenta si `alpha >= minAlpha` (64 por defecto). Todo lo pintado en el SVG es guia.
 3. **Connected components** flood-fill 8-way. Se descartan los blobs demasiado pequeños (especks de anti-aliasing) y los que caen por debajo de `largest × minComponentRatio`.
 4. **Relleno de agujeros pequeños** (solo `'white-body'`): flechas, numeros y dots dentro del cuerpo de la letra se rellenan para no desviar el esqueleto.
-5. **Morphological close** (`closePasses` pasadas de dilate + erode). En `'any-opaque'` el default es 4 — suficiente para cerrar los gaps entre dashes de un `dotted.svg` y producir una linea continua.
+5. **Morphological close** (`closePasses` pasadas de dilate + erode). En `'any-opaque'` el default es 4 — suficiente para cerrar los gaps entre dashes de un `guia.svg` y producir una linea continua.
 6. **Zhang-Suen thinning** → esqueleto de 1 px.
 7. **Pruning** de spurs cortas (`maxSpurLength`).
 8. **Extension de endpoints**: Zhang-Suen se come 1-2 px en cada extremo; se extrapola la direccion del esqueleto hasta salirse del cuerpo para que la guia llegue a los extremos reales.
@@ -63,7 +63,7 @@ Retorna `null` si la extraccion falla (sin blobs o <2 centroides).
 
 #### `async extractGuideFromSvg(svgSrc, width, height, opts = {})`
 
-Thin wrapper sobre `extractGuideMaskFromImage` con `mode: 'any-opaque'`. Este es el entry point usado por `ManualPathDrawer` — rasteriza el `dotted.svg` subido, cierra agresivamente los dashes y extrae el esqueleto. Los defaults del modo `'any-opaque'` (tabla de arriba) estan tuneados para dashes tipicos del punteado; `opts` los sobreescribe si es necesario.
+Thin wrapper sobre `extractGuideMaskFromImage` con `mode: 'any-opaque'`. Este es el entry point usado por `ManualPathDrawer` — rasteriza el `guia.svg` subido, cierra agresivamente los dashes y extrae el esqueleto. Los defaults del modo `'any-opaque'` (tabla de arriba) estan tuneados para dashes tipicos del punteado; `opts` los sobreescribe si es necesario.
 
 #### `snapToPolyline(point, centroids, edges, opts = {})`
 
@@ -95,7 +95,7 @@ Invocada por `ManualPathDrawer.endStroke` y por el boton "Centrar trazado".
 
 ## letterMask.js (fallback raster)
 
-Usado cuando la extraccion del esqueleto de `dotted.svg` no encuentra suficientes puntos (p.ej. un SVG degenerado). Rasteriza la imagen a una mascara binaria y precomputa un distance transform chamfer 3-4 para tirar puntos hacia el eje medial.
+Usado cuando la extraccion del esqueleto de `guia.svg` no encuentra suficientes puntos (p.ej. un SVG degenerado). Rasteriza la imagen a una mascara binaria y precomputa un distance transform chamfer 3-4 para tirar puntos hacia el eje medial.
 
 ### Funciones exportadas
 
@@ -129,13 +129,13 @@ Hoy **solo se usa `generateBaseSvg`**. El resto (`generateFillSvg`, `generateFil
 
 Genera el `base.svg`: template que replica la estructura de los componentes `LetterX` en `ejemplo/letters.js`. El reader hace `fetch` del archivo y lo inyecta via `innerHTML` en un `<div>` para animar los `<path>` con `stroke-dashoffset`, usa `<circle id="circle">` como marcador inicial y `<rect id="letterBg">` como fondo clickable.
 
-- **Input**: `strokePaths: Array<{ d, points? }>`, `width`, `height`, `stroke` (numero concreto, normalmente `effStroke` de `GeneratorPage`).
+- **Input**: `strokePaths: Array<{ d, points? }>`, `width`, `height`, `stroke` (numero concreto, normalmente `effStroke` de `GeneratorPage` — 16 por default).
 - **Output**: string SVG **sin XML prolog ni DOCTYPE** (si los emitiera, al inyectarse via `innerHTML` dentro de un `<div>` el parser HTML los convierte en comentario bogus y las reglas CSS del reader no aplican — la letra sale toda negra). Estructura: `<svg class="svg-letter">` conteniendo:
   - `<rect id="letterBg" x="0" y="0" width="W" height="H"/>`
-  - Un `<path id="path{i+1}" class="svgPath" stroke-width="S" fill="none" d="..."/>` por trazo.
-  - `<circle id="circle" cx cy r/>` en el primer punto del primer trazo, con `r = Math.ceil(S / 1.4)`.
+  - Un `<path id="path{i+1}" class="svgPath" stroke="#f04e23" fill="none" stroke-width="S" d="..."/>` por trazo.
+  - `<circle id="circle" cx cy r fill="blue"/>` en el primer punto del primer trazo, con `r = Math.ceil(S / 1.4)`.
 
-Usa atributos estaticos (`class`, `stroke-width`), no JSX (`className`, `strokeWidth`). `fill="none"` inline es fallback de atributo de presentacion — el CSS del reader (`.svg-letter .svgPath { fill:none; stroke:#f04e23 }`) sobreescribe, pero si falla al cargar los paths no se rellenan en negro.
+Usa atributos estaticos (`class`, `stroke-width`), no JSX (`className`, `strokeWidth`). Los atributos `stroke="#f04e23"` y `fill="none"` en cada `<path>`, junto con `fill="blue"` en el `<circle>`, actuan como **fallbacks de atributo de presentacion**: el CSS del reader (`.svg-letter .svgPath { fill:none; stroke:#f04e23 }`) sobreescribe, pero si falla al cargar los paths no se rellenan en negro y el marcador sigue siendo visible.
 
 ---
 
@@ -171,8 +171,9 @@ Computa `dotSize` y `animationPathStroke` para una letra.
 
 - **Input**: letra, tipo, ancho del canvas
 - **Output**: `{ dotSize: number, animationPathStroke: number }`
-- **Logica mayusculas**: `dotSize` = 34 (40 si `canvasW > 240`), `stroke` = 10 (12 si `canvasW > 350`)
-- **Logica ligada**: ramas por `canvasW` (26-38) + overrides especificos para `e`, `i`, `k`, `m`, `n`, `u`, `p`
+- **`animationPathStroke`**: fijo en **16** para todas las letras y ambos tipos. Este valor se embebe en `base.svg` como `stroke-width="16"` para replicar la referencia canonica (`ejemplo/trazado-letra-a/base.svg`). El usuario puede sobreescribirlo desde el input `strokeWidth` del Paso 2 (`0 = usar el default 16`, `>0 = forzar otro valor`).
+- **`dotSize` mayusculas**: 34 (40 si `canvasW > 240`).
+- **`dotSize` ligada**: ramas por `canvasW` (28-38) + overrides especificos para `e`, `i`, `k`, `m`, `n`, `u`, `p`.
 
 ### `computeDotCount(pathLengthPx)` *(sin callers)*
 

@@ -5,7 +5,20 @@
       "Bash(python3:*)",
       "Bash(npx vite:*)",
       "Bash(npm run *)",
-      "Bash(awk NR<=40 *)"
+      "Bash(awk NR<=40 *)",
+      "Bash(grep -oE \".{50}getFixedPosition[^}]{0,400}\" /Users/luis/Desktop/Oneclick/Edelvives/Infantil2026/pruebas-trazados/public/reader/static/js/main.c717ab08.chunk.js)",
+      "Bash(grep -oE \"getInitialCoords[^}]{0,500}\" /Users/luis/Desktop/Oneclick/Edelvives/Infantil2026/pruebas-trazados/public/reader/static/js/main.c717ab08.chunk.js)",
+      "Bash(grep -oE \"onCompleteAnimations[^}]{0,500}\" /Users/luis/Desktop/Oneclick/Edelvives/Infantil2026/pruebas-trazados/public/reader/static/js/main.c717ab08.chunk.js)",
+      "Bash(grep -oE \"showStart[^}]{0,250}\" /Users/luis/Desktop/Oneclick/Edelvives/Infantil2026/pruebas-trazados/public/reader/static/js/main.c717ab08.chunk.js)",
+      "Bash(grep -oE \"getFixedPosition:function\\\\\\(\\\\\\)\\\\{[^}]{0,600}\" /Users/luis/Desktop/Oneclick/Edelvives/Infantil2026/pruebas-trazados/public/reader/static/js/main.c717ab08.chunk.js)",
+      "Bash(grep -oE \"getFixedPosition:function\\\\\\(\\\\\\)\\\\{.{0,900}\" /Users/luis/Desktop/Oneclick/Edelvives/Infantil2026/pruebas-trazados/public/reader/static/js/main.c717ab08.chunk.js)",
+      "Bash(grep -oE \"#fixedDot[^}]{0,200}|fixedDot[^\\\\\"]{0,200}\" /Users/luis/Desktop/Oneclick/Edelvives/Infantil2026/pruebas-trazados/public/reader/static/css/main.75751244.chunk.css)",
+      "Bash(grep -oE \"fixedDot[^{]{0,50}\\\\{[^}]{0,400}\" /Users/luis/Desktop/Oneclick/Edelvives/Infantil2026/pruebas-trazados/public/reader/static/css/main.75751244.chunk.css)",
+      "Bash(grep -oE \"#dragger[^{]{0,50}\\\\{[^}]{0,400}|drag-dot[^{]{0,50}\\\\{[^}]{0,400}|activityTrazado[^{]{0,50}\\\\{[^}]{0,400}\" /Users/luis/Desktop/Oneclick/Edelvives/Infantil2026/pruebas-trazados/public/reader/static/css/main.75751244.chunk.css)",
+      "Bash(grep -oE \"dragger.{0,30}\" /Users/luis/Desktop/Oneclick/Edelvives/Infantil2026/pruebas-trazados/ejemplo/trazado-letra-a/data.json)",
+      "Bash(git mv *)",
+      "Bash(grep -E \"^\\(bg|dotted\\)\\\\.svg$|base\\\\.svg$|guia\\\\.svg$\")",
+      "Bash(grep *)"
     ]
   }
 }

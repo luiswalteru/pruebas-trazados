@@ -10,9 +10,11 @@ import {
  *
  * Allows the user to draw tracing paths manually on a canvas that shows
  * the letter shape as a visual guide built from two uploaded SVGs: a
- * background layer (`bg.svg`) and a dashed tracing guide on top
- * (`dotted.svg`). The user draws over this stack; the snap-to-guide uses
- * `dotted.svg`'s skeleton.
+ * background illustration layer (`base.svg`) and a dashed tracing guide on
+ * top (`guia.svg`). The user draws over this stack; the snap-to-guide uses
+ * `guia.svg`'s skeleton. Note: the uploaded `base.svg` is purely a visual
+ * backdrop here and is unrelated to the `base.svg` the generator later
+ * emits (the animation template consumed by the reader).
  *
  * Mouse / touch:
  *   • Mouse-down  → starts a new stroke
@@ -29,9 +31,10 @@ import {
  * Props:
  *   letter        – the letter being drawn (for display)
  *   type          – 'ligada' | 'mayusculas'
- *   bgSvg         – data URL of the base bg.svg (rendered under the drawing)
- *   dottedSvg     – data URL of the dashed dotted.svg (rendered over bg, also
- *                   used to extract the snap skeleton)
+ *   baseSvg       – data URL of the uploaded base.svg illustration (rendered
+ *                   under the drawing as a visual backdrop)
+ *   guiaSvg       – data URL of the uploaded dashed guia.svg (rendered over
+ *                   the illustration, also the source of the snap skeleton)
  *   width         – canvas width in letter-space units
  *   height        – canvas height in letter-space units
  *   dotCount      – how many dots to resample each stroke to
@@ -42,11 +45,11 @@ import {
 export default function ManualPathDrawer({
   letter = '',
   type = 'ligada',
-  bgSvg = '',
-  dottedSvg = '',
+  baseSvg = '',
+  guiaSvg = '',
   width = 380,
   height = 340,
-  dotCount = 40,
+  dotCount = 25,
   dotSize = 33,
   onComplete,
   onCancel,
@@ -86,7 +89,7 @@ export default function ManualPathDrawer({
 
   const displayLetter = type === 'mayusculas' ? letter.toUpperCase() : letter.toLowerCase()
 
-  // Build the snap mask from the uploaded dotted.svg. The extractor
+  // Build the snap mask from the uploaded guia.svg. The extractor
   // rasterizes the SVG, treats every opaque pixel as guide-body, closes the
   // dash gaps and skeletonizes — the resulting polyline is what the drawn
   // strokes snap to. If the SVG can't be parsed as a polyline (too few
@@ -98,11 +101,11 @@ export default function ManualPathDrawer({
     guideRef.current = null
     setGuideDebug(null)
     setMaskMode('none')
-    if (!dottedSvg) return
+    if (!guiaSvg) return
 
     const run = async () => {
       try {
-        const guide = await extractGuideFromSvg(dottedSvg, width, height)
+        const guide = await extractGuideFromSvg(guiaSvg, width, height)
         if (cancelled) return
         if (guide && guide.edges.length > 0 && guide.centroids.length >= 3) {
           maskRef.current = guide
@@ -119,7 +122,7 @@ export default function ManualPathDrawer({
       } catch (_) { /* fall through to raster fallback */ }
 
       try {
-        const mask = await buildMaskFromImage(dottedSvg, width, height)
+        const mask = await buildMaskFromImage(guiaSvg, width, height)
         if (cancelled) return
         maskRef.current = mask
         setMaskMode('fallback')
@@ -130,7 +133,7 @@ export default function ManualPathDrawer({
     run()
 
     return () => { cancelled = true }
-  }, [dottedSvg, width, height])
+  }, [guiaSvg, width, height])
 
   // ---- Coordinate conversion ------------------------------------------------
   // The container is content-box with a 2 px border, so getBoundingClientRect
@@ -319,9 +322,19 @@ export default function ManualPathDrawer({
         if (diff > Math.PI / 4) coordinates[i].corner = true
       }
 
+      // The reader renders `#fixedDot` as a 20×20 px div positioned by
+      // `transform: translate(dragger[0]px, dragger[1]px)`, which places its
+      // top-left corner — not its centre — at that coordinate. To make the
+      // blue dot land centred on the first traced point we subtract half the
+      // dot size (10 px) from each axis. Without this offset the fixedDot
+      // appears 10 px down-right of the stroke's start and the user-visible
+      // "inicia el trazado aquí" marker does not sit on the trazo. Matches
+      // the reference `ejemplo/trazado-letra-a/data.json` where
+      // `dragger = [31, 148]` ≈ `firstCoord [40.944, 160.184] − (10, 10)`.
+      const DRAGGER_HALF = 10
       const dragger = [
-        parseFloat(resampled[0].x.toFixed(0)),
-        parseFloat(resampled[0].y.toFixed(0)),
+        parseFloat((resampled[0].x - DRAGGER_HALF).toFixed(0)),
+        parseFloat((resampled[0].y - DRAGGER_HALF).toFixed(0)),
       ]
       return { dragger, coordinates }
     })
@@ -360,9 +373,9 @@ export default function ManualPathDrawer({
           <button
             className="btn btn-sm"
             onClick={centerStrokes}
-            disabled={(strokes.length === 0 && currentStroke.length < 2) || !dottedSvg}
-            title={!dottedSvg
-              ? 'Requiere cargar dotted.svg en el paso 1'
+            disabled={(strokes.length === 0 && currentStroke.length < 2) || !guiaSvg}
+            title={!guiaSvg
+              ? 'Requiere cargar guia.svg en el paso 1'
               : 'Suaviza temblores y centra el trazado sobre la guía'}
           >
             Centrar trazado
@@ -397,12 +410,12 @@ export default function ManualPathDrawer({
         <span><kbd>Esc</kbd> limpiar</span>
         {maskMode === 'skeleton' && (
           <span style={{ color: '#2e7d32' }}>
-            Ajuste al soltar: esqueleto de dotted.svg ({guideDebug?.dotCount} puntos)
+            Ajuste al soltar: esqueleto de guia.svg ({guideDebug?.dotCount} puntos)
           </span>
         )}
         {maskMode === 'fallback' && (
           <span style={{ color: '#e65100' }}>
-            Ajuste al soltar: centrado por imagen (esqueleto de dotted.svg no detectado)
+            Ajuste al soltar: centrado por imagen (esqueleto de guia.svg no detectado)
           </span>
         )}
       </div>
@@ -440,10 +453,10 @@ export default function ManualPathDrawer({
           width, height,
           position: 'relative',
         }}>
-          {/* Background layer (bg.svg) — rendered underneath everything */}
-          {bgSvg && (
+          {/* Background layer (base.svg illustration) — rendered underneath everything */}
+          {baseSvg && (
             <img
-              src={bgSvg}
+              src={baseSvg}
               alt=""
               draggable={false}
               style={{
@@ -456,12 +469,13 @@ export default function ManualPathDrawer({
             />
           )}
 
-          {/* Dotted guide (dotted.svg) — layered over bg.svg, this is the
-              visible tracing guide the user follows. Also the source of the
-              snap skeleton (extractGuideFromSvg runs against this). */}
-          {dottedSvg && (
+          {/* Dashed guide (guia.svg) — layered over the base illustration,
+              this is the visible tracing guide the user follows. Also the
+              source of the snap skeleton (extractGuideFromSvg runs against
+              this). */}
+          {guiaSvg && (
             <img
-              src={dottedSvg}
+              src={guiaSvg}
               alt=""
               draggable={false}
               style={{
