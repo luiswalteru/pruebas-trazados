@@ -133,13 +133,19 @@ export default function ManualPathDrawer({
   }, [dottedSvg, width, height])
 
   // ---- Coordinate conversion ------------------------------------------------
+  // The container is content-box with a 2 px border, so getBoundingClientRect
+  // (which returns the border-box) starts 2 px outside the drawing surface.
+  // Subtract clientLeft/clientTop (= border widths) so a click on the top-left
+  // pixel of the visible drawing surface maps to letter-space (0, 0) and not
+  // (2/SCALE, 2/SCALE). Without this, every recorded stroke was offset down
+  // and to the right by ≈ 1.43 letter-units.
   const toLetterCoords = useCallback((clientX, clientY) => {
     const el = containerRef.current
     if (!el) return null
     const rect = el.getBoundingClientRect()
     return {
-      x: (clientX - rect.left) / SCALE,
-      y: (clientY - rect.top) / SCALE,
+      x: (clientX - rect.left - el.clientLeft) / SCALE,
+      y: (clientY - rect.top - el.clientTop) / SCALE,
     }
   }, [SCALE])
 
@@ -286,9 +292,15 @@ export default function ManualPathDrawer({
   const handleFinalize = useCallback(() => {
     if (strokes.length === 0 && currentStroke.length < 2) return
 
-    // If still drawing, commit current stroke first
+    // If still drawing (user hit Enter mid-stroke), commit the in-progress
+    // stroke with the same guide adjustment that endStroke applies on mouse
+    // release. Without this, the last stroke was stored raw while every
+    // other stroke was already projected — they ended up in subtly different
+    // coord systems and the final dotList/strokePaths were inconsistent.
     let allStrokes = [...strokes]
-    if (currentStroke.length >= 2) allStrokes.push(currentStroke)
+    if (currentStroke.length >= 2) {
+      allStrokes.push(adjustStrokeToGuide(currentStroke))
+    }
 
     const dotList = allStrokes.map(rawPts => {
       const resampled = resample(rawPts, dotCount)
@@ -326,7 +338,7 @@ export default function ManualPathDrawer({
     })
 
     onComplete?.({ dotList, strokePaths })
-  }, [strokes, currentStroke, dotCount, onComplete])
+  }, [strokes, currentStroke, dotCount, onComplete, adjustStrokeToGuide])
 
   // ---- Rendering ------------------------------------------------------------
   const allVisibleStrokes = [...strokes]

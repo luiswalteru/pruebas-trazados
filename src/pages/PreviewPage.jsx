@@ -56,14 +56,16 @@ export default function PreviewPage() {
   const SCALE = 1.4
 
   // ---- Coordinate conversion (screen px → letter-space) -------------------
+  // Container is content-box with a 2 px border, so getBoundingClientRect
+  // returns the border-box. Subtract clientLeft/clientTop (the border widths)
+  // so a click on the top-left pixel of the visible drawing surface maps to
+  // letter-space (0, 0). Matches the same correction in ManualPathDrawer.
   const screenToLetter = useCallback((clientX, clientY) => {
     const el = containerRef.current
     if (!el) return { x: 0, y: 0 }
     const rect = el.getBoundingClientRect()
-    // The inner content is rendered at SCALE via CSS transform.
-    // So 1 letter-unit = SCALE screen-pixels.
-    const x = (clientX - rect.left) / SCALE
-    const y = (clientY - rect.top) / SCALE
+    const x = (clientX - rect.left - el.clientLeft) / SCALE
+    const y = (clientY - rect.top - el.clientTop) / SCALE
     return { x, y }
   }, [SCALE])
 

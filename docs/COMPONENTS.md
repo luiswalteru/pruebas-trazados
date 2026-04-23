@@ -37,6 +37,11 @@ Selecciona **una sola** letra (click en la misma la deselecciona; click en otra 
 #### `handleSvgUpload(kind)` / `clearSvg(kind)`
 `kind` es `'bg'` o `'dotted'`. Lee el archivo con `FileReader.readAsDataURL` — acepta solo `.svg` (mime `image/svg+xml`). Guarda en `images[activeLetter][kind]`. `clearSvg` borra solo el slot correspondiente; si la letra queda sin ningun SVG se elimina la entrada entera.
 
+Tras guardar el dataURL, llama a `parseSvgDims` para extraer el tamaño intrinseco del SVG (atributos `width`/`height`, fallback a `viewBox`). Si no coincide con `canvasWidth`×`canvasHeight`, emite un `console.warn` con ambos valores. **No** modifica el canvas automaticamente: `canvasWidth`/`canvasHeight` alimentan `computeLetterParams` (dotSize / animationPathStroke) y el escalado del drawer, asi que sobreescribirlos silenciosamente cambiaria los parametros del dibujo. El usuario decide si ajusta en el Paso 2 para que los viewBox coincidan.
+
+#### `parseSvgDims(dataUrl)`
+Helper local (fuera del componente). Decodifica el payload del dataURL (`base64` o URL-encoded), parsea el SVG con `DOMParser`, y devuelve `{ width, height }` redondeados — primero de los atributos `width`/`height` (strippeando unidades via `parseFloat`), luego del `viewBox` si los atributos no son parseables. Retorna `null` si nada se puede parsear. Usado solo para el warning anterior.
+
 #### `handleManualComplete(letter, result)`
 Callback del `ManualPathDrawer`. Guarda `{ dotList, strokePaths }` en `manualDrawings[letter]`.
 
@@ -157,7 +162,7 @@ En la barra de atajos:
 
 ### Proceso de finalizacion (`handleFinalize`)
 
-1. Combina `strokes` + `currentStroke` (si tiene ≥2 puntos — ese caso adicional corre el adjuster tambien).
+1. Combina `strokes` (ya proyectados en `endStroke`) + `currentStroke` si tiene ≥2 puntos. El trazo en curso se pasa por `adjustStrokeToGuide(currentStroke)` antes de agregarse, para que quede en el mismo espacio que los trazos completados. Este caso se dispara cuando el usuario presiona `Enter` mientras dibuja — sin este paso, el ultimo trazo quedaria crudo mientras el resto iba proyectado, produciendo un `dotList` inconsistente en el export.
 2. Por cada trazo ya ajustado:
    - `resample(pts, dotCount)` a N puntos equidistantes
    - Formato `{ coords: [x.toFixed(3), y.toFixed(3)] }`
@@ -174,13 +179,13 @@ En la barra de atajos:
 toLetterCoords(clientX, clientY) {
   const rect = container.getBoundingClientRect()
   return {
-    x: (clientX - rect.left) / SCALE,   // SCALE = 1.4
-    y: (clientY - rect.top) / SCALE,
+    x: (clientX - rect.left - el.clientLeft) / SCALE,   // SCALE = 1.4
+    y: (clientY - rect.top - el.clientTop) / SCALE,
   }
 }
 ```
 
-El contenedor renderiza el hijo scalado via `transform: scale(1.4)` y usa `box-sizing: content-box` para que el border no entre en el tamaño.
+El contenedor renderiza el hijo scalado via `transform: scale(1.4)` y usa `box-sizing: content-box` con un borde de 2 px. `getBoundingClientRect` devuelve el **border-box**, asi que sin la correccion cada click quedaba desplazado `borderWidth / SCALE` letter-units abajo y a la derecha (≈ 1.43 u con un borde de 2 px). Restar `clientLeft` / `clientTop` (= anchos del borde) mapea el pixel superior-izquierdo del area dibujable a letter-space `(0, 0)`.
 
 ### Funciones auxiliares internas
 
@@ -234,6 +239,10 @@ Pagina de preview interactivo. Simula como el componente consumidor presenta el 
 ### Panel de debug
 
 Muestra: phase, step, dot actual, coordenadas del mouse, distancia al target, hit radius, canvas size/scale/dotSize, resumen del `dotList` en JSON.
+
+### Conversion de coordenadas (`screenToLetter`)
+
+Idéntica correccion que en `ManualPathDrawer`: el contenedor es `content-box` con un borde de 2 px, asi que `getBoundingClientRect` parte del border-box. Se resta `el.clientLeft` / `el.clientTop` al offset antes de dividir por `SCALE = 1.4`, de modo que la deteccion de hit con los dots queda en el mismo espacio en el que se dibujaron. Sin esta correccion, el hit radius efectivo estaba desplazado ≈ 1.43 u hacia abajo-derecha y los dots de la cabecera de algunos trazos quedaban fuera de alcance.
 
 ---
 

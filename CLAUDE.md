@@ -14,7 +14,7 @@ Destination path in the downstream app is `public/lecto_pruebas_2026/assets/traz
 
 ```bash
 npm install
-npm run dev       # Vite dev server on http://localhost:5173 (auto-opens)
+npm run dev       # Vite dev server on http://localhost:5177 (auto-opens)
 npm run build     # Production build into dist/
 npm run preview   # Preview the production build
 ```
@@ -74,6 +74,12 @@ On `endStroke`:
 - Score for a candidate projection = `d²(proj, cursor) + 2.5·lateral² + 0.4·max(0,−forward)²`, where forward/lateral are decomposed relative to the tip's direction. Forward motion is free; sideways jumps across the letter's body are heavily penalised.
 
 At finalize time (`handleFinalize`): for each already-adjusted stroke, `resample` to `dotCount` equidistant points, mark corners (angle delta > π/4), `toFixed(3)` coords, `toFixed(0)` on the first point for the `dragger`. `strokePaths` are built separately with a lighter `smooth(_, 2)` for `base.svg`. **The drawer no longer emits `skeletonPaths`** (no `letter-dotted.svg` is produced any more).
+
+If the user hits `Enter` while a stroke is still in progress, `handleFinalize` routes `currentStroke` through `adjustStrokeToGuide` before appending it to `strokes` — otherwise the in-progress stroke would be stored raw while the rest were already projected, producing an inconsistent `dotList`.
+
+### Coordinate conversion (`toLetterCoords` / `screenToLetter`)
+
+The drawer container and the preview container are both `content-box` with a 2 px border. `getBoundingClientRect()` returns the **border-box**, so a click on the top-left pixel of the visible drawing surface translates to letter-space `(≈ 1.43, 1.43)` (`borderWidth / SCALE`) unless you subtract `el.clientLeft` / `el.clientTop` (= the border widths). Both `ManualPathDrawer.toLetterCoords` and `PreviewPage.screenToLetter` do this subtraction. If you ever see every stroke drifting down-right by ≈ 1–2 units, check that the correction is still there.
 
 ### Skeleton extraction from `dotted.svg`
 
@@ -136,6 +142,8 @@ Canvas size is **not** auto-computed — it's whatever the user configures in St
 - `computeLetterParams(letter, type, canvasW)` returns `{ dotSize, animationPathStroke }` based on canvas width buckets + letter-specific overrides for `e`, `i`, `k`, `m`, `n`, `u`, `p` (ligada) and `canvasW > 240/350` thresholds (mayusculas). Values come from the original `lecto_pruebas_2026` project's tuning.
 
 **Override convention** (important for `GeneratorPage` inputs): `0 = auto-compute, >0 = user forces this value`. Canvas w/h don't have this convention — any user value is used directly.
+
+**Uploaded-SVG dimensions**: `handleSvgUpload` calls `parseSvgDims(dataUrl)` (local helper) to parse intrinsic `width`/`height` (or `viewBox` as fallback) from the SVG. If the result differs from `canvasWidth`×`canvasHeight`, a `console.warn` is emitted. The canvas is **not** auto-overridden — the canvas feeds `computeLetterParams` and the drawer's display size, so silently resizing it would change `dotSize` / `animationPathStroke` and the visual scale of the drawing surface. The warning is advisory only: the user must reconcile the viewBoxes manually in Step 2 if the reader needs `base.svg`'s viewBox to match `bg.svg` / `dotted.svg`.
 
 ### SVG ID contract
 

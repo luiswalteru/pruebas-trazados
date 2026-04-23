@@ -19,7 +19,7 @@ Aplicacion standalone Vite + React para generar ejercicios interactivos de traza
 
 ```bash
 npm install
-npm run dev      # Servidor de desarrollo en http://localhost:5173 (auto-abre)
+npm run dev      # Servidor de desarrollo en http://localhost:5177 (auto-abre)
 npm run build    # Build de produccion
 npm run preview  # Preview del build de produccion
 ```
@@ -93,6 +93,8 @@ trazados-generator/
 ### GeneratorPage - Wizard de 3 Pasos
 
 **Paso 1: Tipo, letra e imagenes** - Elegir entre "ligada" o "mayusculas", seleccionar **una sola letra** del grid (seleccion exclusiva — click en otra la reemplaza), y subir los dos SVG de referencia para esa letra: `bg.svg` (base) y `dotted.svg` (guia). Ambos son obligatorios para avanzar. El panel muestra una vista previa apilada de los dos archivos para confirmar que se alinean correctamente. El abecedario tiene 27 letras (a-z + ñ) + ch + ll.
+
+> Al subir cada SVG se parsea su `width`/`height` (con fallback a `viewBox`) y, si no coincide con el canvas configurado en el Paso 2, se emite un `console.warn` con ambos tamaños. No se sobreescriben los valores del canvas: esos alimentan `computeLetterParams` (dotSize / stroke) y cambiarlos silenciosamente alteraria el dibujo. El aviso existe para que el usuario concilie los viewBox manualmente si el reader requiere que coincidan para apilar `base.svg` con `bg.svg` / `dotted.svg`.
 
 **Paso 2: Dibujar trazado** - Config (canvas w/h, dotCount, dotSize, strokeWidth) + `ManualPathDrawer` con `bg.svg` + `dotted.svg` apilados como guia visible. El usuario dibuja libre con el cursor; al soltar el mouse, el trazo se proyecta sobre la polilinea extraida del esqueleto de `dotted.svg`. Tick ✓ junto al titulo cuando hay trazado guardado. Boton "Generar y continuar" → paso 3.
 

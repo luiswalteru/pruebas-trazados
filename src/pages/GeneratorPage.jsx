@@ -7,6 +7,45 @@ import ManualPathDrawer from '../components/ManualPathDrawer'
 
 const ALL_LETTERS = [...SPANISH_LETTERS, ...SPECIAL_COMBOS]
 
+/**
+ * Parse intrinsic width/height from an SVG data URL. The uploaded SVGs dictate
+ * the letter-space coordinate system: `base.svg`'s viewBox must match
+ * `bg.svg`'s (and by extension `dotted.svg`'s) so the reader can stack all
+ * three layers without misalignment. Looks at the `width`/`height` attributes
+ * first, falls back to `viewBox`. Returns `null` if nothing parseable.
+ */
+function parseSvgDims(dataUrl) {
+  if (!dataUrl || typeof dataUrl !== 'string') return null
+  try {
+    const comma = dataUrl.indexOf(',')
+    if (comma < 0) return null
+    const header = dataUrl.slice(0, comma)
+    const body = dataUrl.slice(comma + 1)
+    const text = header.includes(';base64')
+      ? atob(body)
+      : decodeURIComponent(body)
+    const doc = new DOMParser().parseFromString(text, 'image/svg+xml')
+    const svg = doc.querySelector('svg')
+    if (!svg) return null
+    // Attributes may carry unit suffixes ("380px"); parseFloat strips them.
+    const w = parseFloat(svg.getAttribute('width'))
+    const h = parseFloat(svg.getAttribute('height'))
+    if (Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0) {
+      return { width: Math.round(w), height: Math.round(h) }
+    }
+    const vb = svg.getAttribute('viewBox')
+    if (vb) {
+      const parts = vb.split(/\s+|,/).map(Number)
+      if (parts.length === 4 && parts[2] > 0 && parts[3] > 0) {
+        return { width: Math.round(parts[2]), height: Math.round(parts[3]) }
+      }
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
 // Persist generator state across navigations so returning from Preview restores it
 const _persisted = window.__generatorState || {}
 
@@ -63,21 +102,39 @@ export default function GeneratorPage() {
   // Reference SVG upload for the active letter. `kind` is 'bg' or 'dotted' —
   // both must be set before the user can advance to Step 2. The dotted SVG is
   // used as the snap skeleton by the drawer.
+  //
+  // We do NOT auto-override canvasWidth/canvasHeight from the uploaded SVG's
+  // intrinsic dimensions, because the canvas dims feed `computeLetterParams`
+  // (which sets dotSize / animationPathStroke) and drive the drawer's display
+  // size — silently changing them resized the drawing area and the stroke
+  // thickness. Instead we warn in the console when the canvas and the SVG's
+  // viewBox differ, so the user can reconcile them manually if the reader
+  // needs matching viewBoxes for stacking. The `base.svg` viewBox stays
+  // aligned with `data.json.letterSize`, which is the canonical letter-space.
   const handleSvgUpload = useCallback((kind) => (e) => {
     const file = e.target.files[0]
     if (!file || !activeLetter) return
     const reader = new FileReader()
     reader.onload = () => {
+      const dataUrl = reader.result
       setImages(prev => ({
         ...prev,
-        [activeLetter]: { ...(prev[activeLetter] || {}), [kind]: reader.result },
+        [activeLetter]: { ...(prev[activeLetter] || {}), [kind]: dataUrl },
       }))
+      const dims = parseSvgDims(dataUrl)
+      if (dims && (dims.width !== canvasWidth || dims.height !== canvasHeight)) {
+        console.warn(
+          `[GeneratorPage] ${kind}.svg mide ${dims.width}×${dims.height}, ` +
+          `canvas actual ${canvasWidth}×${canvasHeight}. Si los viewBox deben coincidir ` +
+          `para el reader, ajusta canvas manualmente en el paso 2.`,
+        )
+      }
     }
     reader.onerror = () => alert('Error al leer el SVG')
     reader.readAsDataURL(file)
     // Reset input so uploading the same file again re-triggers onChange
     e.target.value = ''
-  }, [activeLetter])
+  }, [activeLetter, canvasWidth, canvasHeight])
 
   const clearSvg = useCallback((kind) => () => {
     if (!activeLetter) return
